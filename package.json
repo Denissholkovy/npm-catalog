@@ -2,7 +2,7 @@
   "name": "npm-catalog",
   "displayName": "NPM Catalog",
   "description": "Browse the most popular npm packages by category — Frontend, Backend, Mobile, and more — right from the sidebar.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "Denys-Shovkovyi",
   "license": "MIT",
   "icon": "media/marketplace-icon.png",
