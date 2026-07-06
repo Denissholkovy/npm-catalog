@@ -90,6 +90,14 @@ class PackageDetailsPanel {
       ? `<p class="error">Failed to load full package details: ${details.error}</p>`
       : '';
 
+    const isScaffold = pkg.commandType === 'npx' || pkg.commandType === 'npm-create';
+    const actionLabel = isScaffold ? 'Run' : 'Install';
+    const commandLabel = isScaffold ? 'Command to run:' : 'Install command:';
+    const scaffoldNote = isScaffold
+      ? `<p class="note">This runs an interactive project generator — follow the
+         prompts in the terminal to name and configure your new project.</p>`
+      : '';
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -109,8 +117,9 @@ class PackageDetailsPanel {
   ${statsLine ? `<div class="stats">${statsLine}</div>` : ''}
   <div class="links">${linksBlock}</div>
 
-  <p>Install command: <code>${pkg.install}</code></p>
-  <button id="installBtn">Install</button>
+  <p>${commandLabel} <code>${pkg.install}</code></p>
+  ${scaffoldNote}
+  <button id="installBtn">${actionLabel}</button>
 
   ${readmeBlock}
 
@@ -181,6 +190,13 @@ class PackageDetailsPanel {
   .section-title { border-top: 1px solid var(--vscode-panel-border); padding-top: 16px; margin-top: 24px; }
   .readme img { max-width: 100%; }
   .error { color: var(--vscode-errorForeground); }
+  .note {
+    background: var(--vscode-textBlockQuote-background);
+    border-left: 3px solid var(--vscode-textLink-foreground);
+    padding: 8px 12px;
+    font-size: 13px;
+    opacity: 0.9;
+  }
 `;
   }
 }

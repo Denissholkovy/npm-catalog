@@ -16,18 +16,22 @@ class PackageService {
     return cached ? cached.value : null;
   }
 
-  async fetchFirstPage(cacheKey, query) {
-    const packages = await this._fetchPageWithRetry(query, 0);
+  async fetchFirstPage(cacheKey, query, installType) {
+    const packages = await this._fetchPageWithRetry(query, 0, installType);
     const page = { packages, hasMore: packages.length === PAGE_SIZE };
     this.cache.set(cacheKey, page);
     return page;
   }
 
-  async fetchNextPage(cacheKey, query) {
+  async fetchNextPage(cacheKey, query, installType) {
     const existing = this.peekCategory(cacheKey);
     const existingPackages = existing ? existing.packages : [];
 
-    const newPackages = await this._fetchPageWithRetry(query, existingPackages.length);
+    const newPackages = await this._fetchPageWithRetry(
+      query,
+      existingPackages.length,
+      installType
+    );
 
     const seenNames = new Set(existingPackages.map((pkg) => pkg.name));
     const merged = existingPackages.concat(newPackages.filter((pkg) => !seenNames.has(pkg.name)));
@@ -37,11 +41,11 @@ class PackageService {
     return page;
   }
 
-  async _fetchPageWithRetry(query, from, attempts = 2) {
+  async _fetchPageWithRetry(query, from, installType, attempts = 2) {
     let lastError;
     for (let i = 0; i < attempts; i++) {
       try {
-        return await this.client.searchPackages(query, PAGE_SIZE, from);
+        return await this.client.searchPackages(query, PAGE_SIZE, from, installType);
       } catch (err) {
         lastError = err;
       }

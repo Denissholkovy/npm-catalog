@@ -1,4 +1,34 @@
 {
+  "Project Starters": {
+    "Next.js": { "query": "create-next-app", "installType": "npm-create" },
+    "Vite": { "query": "create-vite", "installType": "npm-create" },
+    "Vue": { "query": "create-vue", "installType": "npm-create" },
+    "SvelteKit": { "query": "create-svelte", "installType": "npm-create" },
+    "Astro": { "query": "create-astro", "installType": "npm-create" },
+    "Remix": { "query": "create-remix", "installType": "npm-create" },
+    "T3 Stack (Next.js+tRPC)": {
+      "query": "create-t3-app",
+      "installType": "npm-create"
+    },
+    "Nuxt": { "query": "nuxi", "installType": "npx" },
+    "Angular CLI": { "query": "@angular/cli", "installType": "npx" },
+    "Express Generator": { "query": "express-generator", "installType": "npx" },
+    "NestJS CLI": { "query": "@nestjs/cli", "installType": "npx" },
+    "Gatsby CLI": { "query": "gatsby-cli", "installType": "npx" },
+    "React Native CLI": {
+      "query": "@react-native-community/cli",
+      "installType": "npx"
+    },
+    "Expo CLI": { "query": "create-expo-app", "installType": "npm-create" },
+    "Electron + Vite": {
+      "query": "create-electron-vite",
+      "installType": "npm-create"
+    },
+    "Turborepo Monorepo": {
+      "query": "create-turbo",
+      "installType": "npm-create"
+    }
+  },
   "Frontend": {
     "UI Frameworks & Libraries": "react vue angular svelte framework",
     "CSS & Styling": "css framework styling",

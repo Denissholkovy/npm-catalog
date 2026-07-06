@@ -57,7 +57,7 @@ class NpmRegistryClient {
     });
   }
 
-  async searchPackages(query, size, from) {
+  async searchPackages(query, size, from, installType) {
     const url =
       `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}` +
       `&size=${size}&from=${from || 0}` +
@@ -70,17 +70,31 @@ class NpmRegistryClient {
 
     return json.objects
       .filter((entry) => entry && entry.package && entry.package.name)
-      .map((entry) => this._toPackageSummary(entry.package));
+      .map((entry) => this._toPackageSummary(entry.package, installType));
   }
 
-  _toPackageSummary(pkg) {
+  _toPackageSummary(pkg, installType) {
     return {
       name: pkg.name,
       description: pkg.description || 'No description available',
       npmUrl: (pkg.links && pkg.links.npm) || `https://www.npmjs.com/package/${pkg.name}`,
-      install: `npm install ${pkg.name}`,
+      install: this._buildInstallCommand(pkg.name, installType),
+      commandType: installType || 'npm',
       version: pkg.version
     };
+  }
+
+  _buildInstallCommand(name, installType) {
+    switch (installType) {
+      case 'npx':
+        return `npx ${name}@latest`;
+      case 'npm-create': {
+        const shortName = name.replace(/^create-/, '');
+        return `npm create ${shortName}@latest`;
+      }
+      default:
+        return `npm install ${name}`;
+    }
   }
 
   getPackageMetadata(name) {

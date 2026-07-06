@@ -106,18 +106,23 @@ class CatalogTreeProvider {
   _getCategories(groupElement) {
     const groupName = groupElement.payload.name;
     const categories = this.tree[groupName] || {};
-    return Object.keys(categories).map(
-      (categoryName) =>
-        new CatalogItem(categoryName, vscode.TreeItemCollapsibleState.Collapsed, 'category', {
-          groupName,
-          name: categoryName,
-          query: categories[categoryName]
-        })
-    );
+    return Object.keys(categories).map((categoryName) => {
+      const raw = categories[categoryName];
+      const isObjectForm = typeof raw === 'object' && raw !== null;
+      const query = isObjectForm ? raw.query : raw;
+      const installType = isObjectForm ? raw.installType || 'npm' : 'npm';
+
+      return new CatalogItem(categoryName, vscode.TreeItemCollapsibleState.Collapsed, 'category', {
+        groupName,
+        name: categoryName,
+        query,
+        installType
+      });
+    });
   }
 
   async _getPackages(categoryElement) {
-    const { groupName, name: categoryName, query } = categoryElement.payload;
+    const { groupName, name: categoryName, query, installType } = categoryElement.payload;
     const cacheKey = `${groupName}::${categoryName}`;
 
     const forceRefresh = this._forceRefreshKey === cacheKey;
@@ -128,22 +133,22 @@ class CatalogTreeProvider {
     const cachedPage = this.packageService.peekCategory(cacheKey);
 
     if (!cachedPage && !explicitLoad && !forceRefresh) {
-      return [this._loadItem(groupName, categoryName, query, 'Click to load packages…')];
+      return [this._loadItem(groupName, categoryName, query, installType, 'Click to load packages…')];
     }
 
     try {
       const page =
         forceRefresh || !cachedPage
-          ? await this.packageService.fetchFirstPage(cacheKey, query)
-          : await this.packageService.fetchNextPage(cacheKey, query);
+          ? await this.packageService.fetchFirstPage(cacheKey, query, installType)
+          : await this.packageService.fetchNextPage(cacheKey, query, installType);
 
-      return this._buildPackageItems(page, groupName, categoryName, query);
+      return this._buildPackageItems(page, groupName, categoryName, query, installType);
     } catch (err) {
       return [this._infoItem(`Failed to load: ${err.message}`, 'error')];
     }
   }
 
-  _buildPackageItems(page, groupName, categoryName, query) {
+  _buildPackageItems(page, groupName, categoryName, query, installType) {
     if (!page.packages.length) {
       return [this._infoItem('No packages found', 'warning')];
     }
@@ -153,17 +158,18 @@ class CatalogTreeProvider {
     );
 
     if (page.hasMore) {
-      items.push(this._loadItem(groupName, categoryName, query, 'Load 20 more…'));
+      items.push(this._loadItem(groupName, categoryName, query, installType, 'Load 20 more…'));
     }
 
     return items;
   }
 
-  _loadItem(groupName, categoryName, query, label) {
+  _loadItem(groupName, categoryName, query, installType, label) {
     return new CatalogItem(label, vscode.TreeItemCollapsibleState.None, 'load-more', {
       groupName,
       name: categoryName,
-      query
+      query,
+      installType
     });
   }
 
