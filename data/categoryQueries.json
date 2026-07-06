@@ -1,0 +1,80 @@
+{
+  "Frontend": {
+    "UI Frameworks & Libraries": "react vue angular svelte framework",
+    "CSS & Styling": "css framework styling",
+    "State Management": "state management",
+    "Routing": "router routing spa",
+    "Data Fetching": "data fetching react query swr apollo client",
+    "Build Tools & Bundlers": "bundler build tool webpack vite",
+    "Animation": "animation library",
+    "Forms & Validation": "form validation react",
+    "Charts & Data Visualization": "chart data visualization",
+    "Icons": "icon library svg icons",
+    "Internationalization (i18n)": "i18n internationalization localization",
+    "Component Documentation": "storybook component documentation",
+    "Testing (Frontend)": "testing react jest cypress",
+    "Linting & Formatting": "eslint prettier linter formatter"
+  },
+  "Backend (Node.js)": {
+    "Web Frameworks": "express koa fastify web framework",
+    "Database & ORM": "orm database sql nosql",
+    "Authentication": "authentication passport jwt oauth",
+    "Security": "keywords:security",
+    "Validation": "keywords:validation",
+    "Logging": "keywords:logging",
+    "Task Queues & Scheduling": "job queue task scheduler cron",
+    "Message Queues": "message queue rabbitmq kafka amqp",
+    "Cloud & Serverless SDKs": "aws sdk firebase admin serverless cloud",
+    "Configuration & Env": "dotenv config environment variables",
+    "CLI Tools": "cli command line tool",
+    "Realtime & WebSockets": "websocket realtime socket.io",
+    "GraphQL": "graphql server",
+    "File Handling & Uploads": "file upload multer storage",
+    "Caching": "cache redis memory-cache",
+    "Process Management": "process manager pm2 cluster",
+    "Email": "email smtp nodemailer",
+    "API Documentation": "openapi swagger api documentation",
+    "Testing (Backend)": "testing mocha jest supertest node"
+  },
+  "Mobile (React Native)": {
+    "Navigation": "react-navigation router native",
+    "UI Component Libraries": "react-native ui components",
+    "State Management": "redux zustand mobx react-native",
+    "Animation": "react-native animation reanimated",
+    "Networking": "react-native http network fetch axios",
+    "Storage & Persistence": "react-native storage async-storage database",
+    "Push Notifications": "react-native push notifications",
+    "Camera & Media": "react-native camera image video media",
+    "Maps & Location": "react-native maps geolocation location",
+    "Forms & Validation": "react-native form validation",
+    "Icons": "react-native icons svg vector",
+    "Native Modules & Device APIs": "react-native native module device sensors",
+    "Authentication": "react-native authentication oauth firebase auth",
+    "Biometrics & Security": "react-native biometrics keychain secure storage",
+    "Deep Linking": "react-native deep linking universal links",
+    "Charts & Data Visualization": "react-native chart graph visualization",
+    "Internationalization (i18n)": "react-native i18n localization",
+    "Build Tools & CLI": "react-native cli expo build tools",
+    "App Distribution": "react-native fastlane app distribution ci",
+    "Testing": "react-native testing jest detox"
+  },
+  "Full-Stack Frameworks": {
+    "Meta-Frameworks": "nextjs nuxt sveltekit remix astro framework",
+    "Static Site Generators": "static site generator gatsby eleventy",
+    "Server-Side Rendering": "server side rendering ssr streaming",
+    "Type-Safe API Layers": "trpc api layer typesafe"
+  },
+  "DevOps & Tooling": {
+    "Monorepo Tools": "monorepo lerna nx turborepo workspace",
+    "CI/CD Helpers": "ci cd pipeline github actions automation",
+    "Docker & Containers": "docker container devops",
+    "Bundle Analysis": "bundle analyzer webpack size",
+    "Task Runners & Automation": "task runner automation scripts"
+  },
+  "Shared & Utilities": {
+    "HTTP Clients": "http client axios fetch request",
+    "Utilities": "utility helper functions lodash",
+    "Date & Time": "date time library",
+    "Functional Programming": "functional programming ramda fp-ts"
+  }
+}

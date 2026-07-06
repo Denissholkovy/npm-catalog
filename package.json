@@ -1,0 +1,92 @@
+{
+  "name": "npm-catalog",
+  "displayName": "NPM Catalog",
+  "description": "Browse the most popular npm packages by category — Frontend, Backend, Mobile, and more — right from the sidebar.",
+  "version": "0.1.0",
+  "publisher": "Denys-Shovkovyi",
+  "license": "MIT",
+  "icon": "media/marketplace-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Denissholkovy/npm-catalog"
+  },
+  "keywords": [
+    "npm",
+    "packages",
+    "catalog",
+    "react",
+    "node",
+    "react-native",
+    "explorer",
+    "dependencies"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onView:npmCatalogView"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "npmCatalog",
+          "title": "NPM Catalog",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "npmCatalog": [
+        {
+          "id": "npmCatalogView",
+          "name": "Packages by Category"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "npmCatalog.showPackageDetails",
+        "title": "Show Package Details"
+      },
+      {
+        "command": "npmCatalog.refresh",
+        "title": "Refresh All Categories",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "npmCatalog.refreshCategory",
+        "title": "Refresh This Category From npm",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "npmCatalog.loadMoreCategory",
+        "title": "Load Packages"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "npmCatalog.refresh",
+          "when": "view == npmCatalogView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "npmCatalog.refreshCategory",
+          "when": "view == npmCatalogView && viewItem == category",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "test": "echo \"No tests yet\""
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0"
+  }
+}
