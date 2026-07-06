@@ -1,39 +1,61 @@
 # NPM Catalog
 
-A visual catalog of npm packages grouped by category, right inside VS Code.
-Packages are fetched automatically from the npm registry.
+Browse the most popular npm packages by category — Frontend, Backend, Mobile,
+and more — without leaving VS Code. No more digging through search results:
+open a category, see what's popular, read the README, and install with one
+click.
 
-## Project Structure
+## Features
 
-```
-npm-catalog/
-├── package.json              extension manifest
-├── data/categoryQueries.json category tree + npm search queries
-├── media/icon.svg            activity bar icon
-└── src/
-    ├── extension.js           entry point (ExtensionController)
-    ├── cache.js                PackageCache — disk cache with TTL
-    ├── npmRegistryClient.js    NpmRegistryClient — all HTTP calls (npm, GitHub)
-    ├── markdownRenderer.js     MarkdownRenderer — README → HTML, code highlighting
-    ├── packageService.js       PackageService — combines client + cache + renderer
-    ├── catalogTreeProvider.js  CatalogItem, CatalogTreeProvider — sidebar tree
-    └── packageDetailsPanel.js  PackageDetailsPanel — webview details view
-```
+- **60+ categories** across 6 groups: Frontend, Backend (Node.js), Mobile
+  (React Native), Full-Stack Frameworks, DevOps & Tooling, and Shared &
+  Utilities.
+- **Popularity-ranked results**, fetched live from the npm registry.
+- **Nothing loads until you ask** — opening a category shows a single
+  "Click to load packages…" prompt, so there's no unnecessary network
+  activity, even if VS Code auto-expands previously opened categories.
+- **"Load 20 more…"** pagination to keep browsing deeper into a category.
+- **Full package details on click**: rendered README (with syntax-highlighted
+  code blocks), license, homepage/repository links, weekly download count,
+  and GitHub stars/avatar.
+- **One-click install** via the integrated terminal.
 
-## Getting Started (Development Mode)
+## Installation
 
-1. Open this folder in VS Code.
-2. Press `F5`.
-3. In the new "Extension Development Host" window, find the extension icon
-   in the activity bar.
-4. Click a group (Frontend / Backend), then a category — the extension
-   queries npm and shows up to 20 of the most relevant packages.
-   Click a package to open a detail view with its README, license,
-   download stats, and an "Install" button.
+Search for **"NPM Catalog"** in the Extensions view (`Cmd+Shift+X` /
+`Ctrl+Shift+X`) and click Install, or install from the
+[Marketplace page](https://marketplace.visualstudio.com/items?itemName=Denys-Shovkovyi.npm-catalog).
 
-## How Auto-Fetching Works
+## Usage
 
-`data/categoryQueries.json` defines the structure:
+1. Click the NPM Catalog icon in the activity bar.
+2. Expand a group (e.g. Frontend), then a category (e.g. State Management).
+3. Click **"Click to load packages…"** to fetch the 20 most popular packages
+   for that category.
+4. Click any package to see its full details — README, license, downloads,
+   links — and press **Install** to run `npm install` in your terminal.
+5. Need more options? Click **"Load 20 more…"** at the bottom of the list.
+
+## How It Works
+
+- Each category is mapped to an npm search query (see
+  `data/categoryQueries.json`). Queries go to the official npm registry
+  search API, weighted toward popularity rather than plain text relevance.
+- Nothing is fetched automatically — every network request is triggered by
+  an explicit click (initial load, "Load more", or the refresh icon).
+- Once loaded, results are cached indefinitely in the extension's storage.
+  Reopening a category later shows the cached list instantly.
+- The refresh icon (⟳) on a category always re-fetches page one, discarding
+  any extra pages you'd loaded. The refresh icon at the top of the panel
+  does this for every category at once.
+- Clicking a package fetches its full README, license, homepage/repository
+  links, weekly download count, and GitHub stars/avatar (if hosted on
+  GitHub) on demand.
+
+## Customizing Categories
+
+Categories live in `data/categoryQueries.json` — a simple group → category →
+npm search query structure:
 
 ```json
 {
@@ -46,97 +68,55 @@ npm-catalog/
 }
 ```
 
-- Each category maps to an npm search query.
-- Queries go to `https://registry.npmjs.org/-/v1/search?text=<query>`.
-- Results are cached for 24 hours in the extension's global storage to
-  avoid unnecessary requests.
-- The refresh button (⟳) at the top of the panel clears the entire cache.
-- The inline (⟳) icon next to a category refreshes only that category.
+Add a new key to add a category or group, using any of these query styles:
 
-## On-Demand Loading
-
-- Opening a category for the **first time** shows a **"Click to load packages…"**
-  item — no network request happens until you click it. This means even if
-  VS Code auto-restores previously expanded categories on reload, nothing is
-  fetched until you explicitly ask.
-- Once loaded, packages are cached indefinitely — reopening the category later
-  shows the cached list instantly, no request needed.
-- **"Load 20 more…"** at the bottom fetches the next page and appends it.
-- The refresh icon (⟳) on a category always fetches page one fresh, discarding
-  any additional pages you had loaded.
-
-## Pagination & Popularity
-
-- Each category initially loads the **20 most popular** packages matching its
-  query (search results are weighted toward popularity, not just text relevance).
-- A **"Load 20 more…"** item appears at the bottom of the list — click it to fetch
-  the next 20 and append them to the cached list for that category.
-- Refreshing a category (⟳) resets it back to the first page of 20.
-
-## Package Detail View
-
-Clicking a package fetches additional data on demand:
-
-- Full README (rendered with basic markdown formatting and code
-  syntax highlighting styled like the VS Code default dark theme)
-- License, homepage, and repository links
-- Weekly download count
-- GitHub avatar and star count (if the repository is hosted on GitHub)
-
-## Adding or Changing Categories
-
-Edit `data/categoryQueries.json` — add a new group or category key with
-an npm search query as the value. Example queries:
-
-- `"keywords:security"` — packages tagged with the security keyword
-- `"http client"` — free-text search
+- `"keywords:security"` — packages tagged with an official npm keyword
+- `"http client"` — free-text relevance search
 - `"keywords:orm typescript"` — combined search
 
-Reload the extension (`F5`) after editing to see the changes.
+If you're running from source, reload the extension (`F5`) after editing.
 
 ## Limitations
 
-- This is a relevance-based search, not an official npm categorization —
-  result quality depends on how well the query is worded.
-- The npm registry API doesn't require a key but does have reasonable
-  rate limits; caching accounts for this.
-- The GitHub API used for avatars/stars is unauthenticated and limited
-  to 60 requests/hour per IP — fine for personal use.
+- Categories are relevance/popularity-based searches, not an official npm
+  taxonomy — result quality depends on how the query is worded.
+- The GitHub API used for avatars/stars is unauthenticated and limited to
+  60 requests/hour per IP, which is plenty for personal use.
 
-## Ideas for Further Improvement
+## Roadmap
 
 - Search/filter box at the top of the tree.
 - "Installed" badge by comparing against the open project's `package.json`.
 - Pinned/manually curated packages alongside the automatic results.
 
-## Publishing to the Marketplace
+## Contributing
 
-Before your first publish, you need to fill in a few placeholders:
+Contributions, category suggestions, and bug reports are welcome — open an
+issue or a pull request.
 
-1. **`package.json`** — replace:
-   - `"publisher": "Denys-Shovkovyi"` with your actual publisher ID
-     (create one at https://marketplace.visualstudio.com/manage — you'll
-     need a free Azure DevOps account and a Personal Access Token)
-   - `"repository.url"` with your actual GitHub repo URL (or remove the
-     `repository` field entirely if you don't have one yet)
-2. **`LICENSE`** — replace `Denys Shovkovyi` with your name.
-3. Optionally replace `media/marketplace-icon.png` with your own 128×128 logo.
+### Project Structure
 
-Then:
-
-```bash
-npm install -g @vscode/vsce
-vsce login Denys-Shovkovyi  
-vsce publish
+```
+npm-catalog/
+├── package.json              extension manifest
+├── data/categoryQueries.json category tree + npm search queries
+├── media/                    icons (activity bar + Marketplace)
+└── src/
+    ├── extension.js           entry point (ExtensionController)
+    ├── cache.js                PackageCache — disk cache
+    ├── npmRegistryClient.js    NpmRegistryClient — all HTTP calls (npm, GitHub)
+    ├── markdownRenderer.js     MarkdownRenderer — README → HTML, code highlighting
+    ├── packageService.js       PackageService — combines client + cache + renderer
+    ├── catalogTreeProvider.js  CatalogItem, CatalogTreeProvider — sidebar tree
+    └── packageDetailsPanel.js  PackageDetailsPanel — webview details view
 ```
 
-`vsce publish` packages and uploads in one step. To just build the `.vsix`
-file without publishing (e.g. to test-install locally or share manually):
+### Running from Source
 
-```bash
-vsce package
-code --install-extension npm-catalog-0.1.0.vsix
-```
+1. Clone the repo and open the folder in VS Code.
+2. Press `F5` to launch an Extension Development Host window.
+3. The extension icon appears in the activity bar of that window.
 
-Every time you publish an update, bump the `version` in `package.json`
-(`vsce publish patch` / `minor` / `major` does this for you automatically).
+## License
+
+MIT — see [LICENSE](LICENSE).
