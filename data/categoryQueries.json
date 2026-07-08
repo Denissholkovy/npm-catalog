@@ -1,32 +1,84 @@
 {
   "Project Starters": {
-    "Next.js": { "query": "create-next-app", "installType": "npm-create" },
-    "Vite": { "query": "create-vite", "installType": "npm-create" },
-    "Vue": { "query": "create-vue", "installType": "npm-create" },
-    "SvelteKit": { "query": "create-svelte", "installType": "npm-create" },
-    "Astro": { "query": "create-astro", "installType": "npm-create" },
-    "Remix": { "query": "create-remix", "installType": "npm-create" },
+    "Next.js": {
+      "query": "create-next-app",
+      "installType": "npm-create",
+      "exact": true
+    },
+    "Vite": {
+      "query": "create-vite",
+      "installType": "npm-create",
+      "exact": true
+    },
+    "Vue": {
+      "query": "create-vue",
+      "installType": "npm-create",
+      "exact": true
+    },
+    "SvelteKit": {
+      "query": "create-svelte",
+      "installType": "npm-create",
+      "exact": true
+    },
+    "Astro": {
+      "query": "create-astro",
+      "installType": "npm-create",
+      "exact": true
+    },
+    "Remix": {
+      "query": "create-remix",
+      "installType": "npm-create",
+      "exact": true
+    },
     "T3 Stack (Next.js+tRPC)": {
       "query": "create-t3-app",
-      "installType": "npm-create"
+      "installType": "npm-create",
+      "exact": true
     },
-    "Nuxt": { "query": "nuxi", "installType": "npx" },
-    "Angular CLI": { "query": "@angular/cli", "installType": "npx" },
-    "Express Generator": { "query": "express-generator", "installType": "npx" },
-    "NestJS CLI": { "query": "@nestjs/cli", "installType": "npx" },
-    "Gatsby CLI": { "query": "gatsby-cli", "installType": "npx" },
+    "Nuxt": {
+      "query": "nuxi",
+      "installType": "npx",
+      "exact": true
+    },
+    "Angular CLI": {
+      "query": "@angular/cli",
+      "installType": "npx",
+      "exact": true
+    },
+    "Express Generator": {
+      "query": "express-generator",
+      "installType": "npx",
+      "exact": true
+    },
+    "NestJS CLI": {
+      "query": "@nestjs/cli",
+      "installType": "npx",
+      "exact": true
+    },
+    "Gatsby CLI": {
+      "query": "gatsby-cli",
+      "installType": "npx",
+      "exact": true
+    },
     "React Native CLI": {
       "query": "@react-native-community/cli",
-      "installType": "npx"
+      "installType": "npx",
+      "exact": true
     },
-    "Expo CLI": { "query": "create-expo-app", "installType": "npm-create" },
+    "Expo CLI": {
+      "query": "create-expo-app",
+      "installType": "npm-create",
+      "exact": true
+    },
     "Electron + Vite": {
       "query": "create-electron-vite",
-      "installType": "npm-create"
+      "installType": "npm-create",
+      "exact": true
     },
     "Turborepo Monorepo": {
       "query": "create-turbo",
-      "installType": "npm-create"
+      "installType": "npm-create",
+      "exact": true
     }
   },
   "Frontend": {

@@ -66,14 +66,34 @@
       {
         "command": "npmCatalog.loadMoreCategory",
         "title": "Load Packages"
+      },
+      {
+        "command": "npmCatalog.searchPackages",
+        "title": "Search Packages",
+        "icon": "$(search)"
+      },
+      {
+        "command": "npmCatalog.clearSearch",
+        "title": "Clear Search",
+        "icon": "$(close)"
       }
     ],
     "menus": {
       "view/title": [
         {
+          "command": "npmCatalog.searchPackages",
+          "when": "view == npmCatalogView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "npmCatalog.clearSearch",
+          "when": "view == npmCatalogView && npmCatalog.hasActiveSearch",
+          "group": "navigation@2"
+        },
+        {
           "command": "npmCatalog.refresh",
           "when": "view == npmCatalogView",
-          "group": "navigation"
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [

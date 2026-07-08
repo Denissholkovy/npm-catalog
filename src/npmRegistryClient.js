@@ -97,6 +97,21 @@ class NpmRegistryClient {
     }
   }
 
+  async getExactPackage(name, installType) {
+    const meta = await this.getPackageMetadata(name);
+    const latestVersion = meta['dist-tags'] && meta['dist-tags'].latest;
+    const versionInfo = (meta.versions && meta.versions[latestVersion]) || {};
+
+    return {
+      name: meta.name || name,
+      description: versionInfo.description || meta.description || 'No description available',
+      npmUrl: `https://www.npmjs.com/package/${meta.name || name}`,
+      install: this._buildInstallCommand(meta.name || name, installType),
+      commandType: installType || 'npm',
+      version: latestVersion
+    };
+  }
+
   getPackageMetadata(name) {
     return this._getJson(`https://registry.npmjs.org/${encodeURIComponent(name)}`);
   }

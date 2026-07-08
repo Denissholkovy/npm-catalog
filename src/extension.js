@@ -33,6 +33,22 @@ class ExtensionController {
         this.treeProvider.requestLoad(payload.groupName, payload.name);
       }
     });
+
+    this._registerCommand('npmCatalog.searchPackages', async () => {
+      const term = await vscode.window.showInputBox({
+        placeHolder: 'Search npm packages by name or keyword…',
+        prompt: 'Enter a package name or keyword to search'
+      });
+      if (term && term.trim()) {
+        this.treeProvider.setSearch(term.trim());
+        vscode.commands.executeCommand('setContext', 'npmCatalog.hasActiveSearch', true);
+      }
+    });
+
+    this._registerCommand('npmCatalog.clearSearch', () => {
+      this.treeProvider.clearSearch();
+      vscode.commands.executeCommand('setContext', 'npmCatalog.hasActiveSearch', false);
+    });
   }
 
   _registerCommand(command, handler) {

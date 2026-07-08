@@ -18,7 +18,9 @@ class CatalogItem extends vscode.TreeItem {
         break;
       case 'category':
         this.contextValue = 'category';
-        this.iconPath = new vscode.ThemeIcon('folder');
+        this.iconPath = new vscode.ThemeIcon(
+          this.payload.groupName === 'Search Results' ? 'search' : 'folder'
+        );
         break;
       case 'package':
         this._configureAsPackage();
@@ -61,6 +63,7 @@ class CatalogTreeProvider {
     this.tree = this._loadCategoryTree();
     this._forceRefreshKey = null;
     this._explicitLoadKey = null;
+    this._searchTerm = null;
   }
 
   _loadCategoryTree() {
@@ -83,6 +86,21 @@ class CatalogTreeProvider {
     this._onDidChangeTreeData.fire();
   }
 
+  setSearch(term) {
+    this._searchTerm = term;
+    this._explicitLoadKey = `Search Results::${term}`;
+    this._onDidChangeTreeData.fire();
+  }
+
+  clearSearch() {
+    this._searchTerm = null;
+    this._onDidChangeTreeData.fire();
+  }
+
+  hasActiveSearch() {
+    return Boolean(this._searchTerm);
+  }
+
   getTreeItem(element) {
     return element;
   }
@@ -95,12 +113,30 @@ class CatalogTreeProvider {
   }
 
   _getGroups() {
-    return Object.keys(this.tree).map(
+    const groups = Object.keys(this.tree).map(
       (groupName) =>
         new CatalogItem(groupName, vscode.TreeItemCollapsibleState.Collapsed, 'group', {
           name: groupName
         })
     );
+
+    if (this._searchTerm) {
+      const searchItem = new CatalogItem(
+        `🔍 "${this._searchTerm}"`,
+        vscode.TreeItemCollapsibleState.Expanded,
+        'category',
+        {
+          groupName: 'Search Results',
+          name: this._searchTerm,
+          query: this._searchTerm,
+          installType: 'npm',
+          exact: false
+        }
+      );
+      return [searchItem, ...groups];
+    }
+
+    return groups;
   }
 
   _getCategories(groupElement) {
@@ -111,18 +147,20 @@ class CatalogTreeProvider {
       const isObjectForm = typeof raw === 'object' && raw !== null;
       const query = isObjectForm ? raw.query : raw;
       const installType = isObjectForm ? raw.installType || 'npm' : 'npm';
+      const exact = isObjectForm ? Boolean(raw.exact) : false;
 
       return new CatalogItem(categoryName, vscode.TreeItemCollapsibleState.Collapsed, 'category', {
         groupName,
         name: categoryName,
         query,
-        installType
+        installType,
+        exact
       });
     });
   }
 
   async _getPackages(categoryElement) {
-    const { groupName, name: categoryName, query, installType } = categoryElement.payload;
+    const { groupName, name: categoryName, query, installType, exact } = categoryElement.payload;
     const cacheKey = `${groupName}::${categoryName}`;
 
     const forceRefresh = this._forceRefreshKey === cacheKey;
@@ -137,10 +175,18 @@ class CatalogTreeProvider {
     }
 
     try {
-      const page =
-        forceRefresh || !cachedPage
-          ? await this.packageService.fetchFirstPage(cacheKey, query, installType)
-          : await this.packageService.fetchNextPage(cacheKey, query, installType);
+      let page;
+      if (exact) {
+        page =
+          forceRefresh || !cachedPage
+            ? await this.packageService.fetchExactPackage(cacheKey, query, installType)
+            : cachedPage;
+      } else {
+        page =
+          forceRefresh || !cachedPage
+            ? await this.packageService.fetchFirstPage(cacheKey, query, installType)
+            : await this.packageService.fetchNextPage(cacheKey, query, installType);
+      }
 
       return this._buildPackageItems(page, groupName, categoryName, query, installType);
     } catch (err) {

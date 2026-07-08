@@ -16,6 +16,13 @@ class PackageService {
     return cached ? cached.value : null;
   }
 
+  async fetchExactPackage(cacheKey, packageName, installType) {
+    const pkg = await this.client.getExactPackage(packageName, installType);
+    const page = { packages: [pkg], hasMore: false };
+    this.cache.set(cacheKey, page);
+    return page;
+  }
+
   async fetchFirstPage(cacheKey, query, installType) {
     const packages = await this._fetchPageWithRetry(query, 0, installType);
     const page = { packages, hasMore: packages.length === PAGE_SIZE };
