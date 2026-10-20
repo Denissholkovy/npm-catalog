@@ -1,5 +1,23 @@
 const https = require('https');
 
+const REQUEST_TIMEOUT_MS = 15000;
+const MAX_REDIRECTS = 3;
+const MAX_ATTEMPTS = 3;
+const MAX_RETRY_AFTER_MS = 5000;
+const RETRY_BASE_DELAY_MS = 400;
+const REDIRECT_STATUSES = [301, 302, 307, 308];
+
+function createError(message, retryable, status) {
+  const error = new Error(message);
+  error.retryable = retryable;
+  error.status = status;
+  return error;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 class NpmRegistryClient {
   constructor(userAgent, maxConcurrentRequests) {
     this.userAgent = userAgent || 'npm-catalog-vscode';
@@ -31,29 +49,71 @@ class NpmRegistryClient {
     }
   }
 
-  _getJson(url) {
-    return this._runQueued(() => this._rawGetJson(url));
+  async _getJson(url, attempts = MAX_ATTEMPTS) {
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        return await this._runQueued(() => this._rawGetJson(url, MAX_REDIRECTS));
+      } catch (err) {
+        lastError = err;
+        if (!err.retryable || attempt === attempts) break;
+        await delay(Math.max(RETRY_BASE_DELAY_MS * attempt, Math.min(err.retryAfterMs || 0, MAX_RETRY_AFTER_MS)));
+      }
+    }
+    throw lastError;
   }
 
-  _rawGetJson(url) {
+  _rawGetJson(url, redirectsLeft) {
     return new Promise((resolve, reject) => {
-      https
-        .get(url, { headers: { 'User-Agent': this.userAgent } }, (res) => {
-          let data = '';
-          res.on('data', (chunk) => (data += chunk));
-          res.on('end', () => {
-            if (res.statusCode !== 200) {
-              reject(new Error(`Status ${res.statusCode} for ${url}`));
-              return;
-            }
-            try {
-              resolve(JSON.parse(data));
-            } catch (err) {
-              reject(err);
-            }
-          });
-        })
-        .on('error', reject);
+      const fail = (err) => {
+        const cause = err && err.cause && err.cause.message ? ` (${err.cause.message})` : '';
+        reject(err && err.retryable !== undefined ? err : createError(`${err.message}${cause}`, true));
+      };
+
+      const request = https.get(url, { headers: { 'User-Agent': this.userAgent } }, (res) => {
+        try {
+          this._handleResponse(url, redirectsLeft, res, resolve, reject);
+        } catch (err) {
+          res.resume();
+          fail(createError(`Response handling failed: ${err.message}`, false));
+        }
+      });
+
+      request.setTimeout(REQUEST_TIMEOUT_MS, () => {
+        request.destroy(createError(`Request timed out for ${url}`, true));
+      });
+      request.on('error', fail);
+    });
+  }
+
+  _handleResponse(url, redirectsLeft, res, resolve, reject) {
+    if (REDIRECT_STATUSES.includes(res.statusCode) && res.headers.location) {
+      res.resume();
+      if (redirectsLeft <= 0) {
+        reject(createError('Too many redirects', false));
+        return;
+      }
+      const next = new URL(res.headers.location, url).toString();
+      resolve(this._rawGetJson(next, redirectsLeft - 1));
+      return;
+    }
+
+    const chunks = [];
+    res.on('data', (chunk) => chunks.push(chunk));
+    res.on('error', (err) => reject(createError(err.message, true)));
+    res.on('end', () => {
+      if (res.statusCode !== 200) {
+        const retryable = res.statusCode >= 500 || res.statusCode === 429;
+        const error = createError(`Status ${res.statusCode} for ${url}`, retryable, res.statusCode);
+        error.retryAfterMs = Number(res.headers['retry-after']) * 1000 || 0;
+        reject(error);
+        return;
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      } catch {
+        reject(createError(`Invalid JSON from ${url}`, false));
+      }
     });
   }
 
@@ -68,9 +128,12 @@ class NpmRegistryClient {
       throw new Error('Unexpected response from npm registry search API');
     }
 
-    return json.objects
-      .filter((entry) => entry && entry.package && entry.package.name)
-      .map((entry) => this._toPackageSummary(entry.package, installType));
+    return {
+      fetched: json.objects.length,
+      packages: json.objects
+        .filter((entry) => entry && entry.package && entry.package.name)
+        .map((entry) => this._toPackageSummary(entry.package, installType))
+    };
   }
 
   _toPackageSummary(pkg, installType) {
@@ -78,38 +141,17 @@ class NpmRegistryClient {
       name: pkg.name,
       description: pkg.description || 'No description available',
       npmUrl: (pkg.links && pkg.links.npm) || `https://www.npmjs.com/package/${pkg.name}`,
-      install: this._buildInstallCommand(pkg.name, installType),
-      commandType: installType || 'npm',
+      installType: installType || 'npm',
       version: pkg.version
     };
   }
 
-  _buildInstallCommand(name, installType) {
-    switch (installType) {
-      case 'npx':
-        return `npx ${name}@latest`;
-      case 'npm-create': {
-        const shortName = name.replace(/^create-/, '');
-        return `npm create ${shortName}@latest`;
-      }
-      default:
-        return `npm install ${name}`;
-    }
-  }
-
   async getExactPackage(name, installType) {
-    const meta = await this.getPackageMetadata(name);
-    const latestVersion = meta['dist-tags'] && meta['dist-tags'].latest;
-    const versionInfo = (meta.versions && meta.versions[latestVersion]) || {};
-
-    return {
-      name: meta.name || name,
-      description: versionInfo.description || meta.description || 'No description available',
-      npmUrl: `https://www.npmjs.com/package/${meta.name || name}`,
-      install: this._buildInstallCommand(meta.name || name, installType),
-      commandType: installType || 'npm',
-      version: latestVersion
-    };
+    const manifest = await this._getJson(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`);
+    return this._toPackageSummary(
+      { name: manifest.name || name, description: manifest.description, version: manifest.version },
+      installType
+    );
   }
 
   getPackageMetadata(name) {
@@ -119,7 +161,8 @@ class NpmRegistryClient {
   async getWeeklyDownloads(name) {
     try {
       const data = await this._getJson(
-        `https://api.npmjs.org/downloads/point/last-week/${encodeURIComponent(name)}`
+        `https://api.npmjs.org/downloads/point/last-week/${encodeURIComponent(name)}`,
+        1
       );
       return typeof data.downloads === 'number' ? data.downloads : null;
     } catch {
@@ -129,7 +172,7 @@ class NpmRegistryClient {
 
   async getGithubRepo(owner, repo) {
     try {
-      return await this._getJson(`https://api.github.com/repos/${owner}/${repo}`);
+      return await this._getJson(`https://api.github.com/repos/${owner}/${repo}`, 1);
     } catch {
       return null;
     }

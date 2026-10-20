@@ -26,9 +26,6 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "onView:npmCatalogView"
-  ],
   "main": "./src/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -44,38 +41,34 @@
       "npmCatalog": [
         {
           "id": "npmCatalogView",
-          "name": "Packages by Category"
+          "name": "Packages",
+          "type": "webview"
         }
       ]
     },
     "commands": [
       {
-        "command": "npmCatalog.showPackageDetails",
-        "title": "Show Package Details"
-      },
-      {
         "command": "npmCatalog.refresh",
         "title": "Refresh All Categories",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "npmCatalog.refreshCategory",
-        "title": "Refresh This Category From npm",
-        "icon": "$(sync)"
-      },
-      {
-        "command": "npmCatalog.loadMoreCategory",
-        "title": "Load Packages"
+        "icon": "$(refresh)",
+        "category": "NPM Catalog"
       },
       {
         "command": "npmCatalog.searchPackages",
         "title": "Search Packages",
-        "icon": "$(search)"
+        "icon": "$(search)",
+        "category": "NPM Catalog"
       },
       {
         "command": "npmCatalog.clearSearch",
         "title": "Clear Search",
-        "icon": "$(close)"
+        "icon": "$(close)",
+        "category": "NPM Catalog"
+      },
+      {
+        "command": "npmCatalog.clearSearchHistory",
+        "title": "Clear Search History",
+        "category": "NPM Catalog"
       }
     ],
     "menus": {
@@ -95,14 +88,37 @@
           "when": "view == npmCatalogView",
           "group": "navigation@3"
         }
-      ],
-      "view/item/context": [
-        {
-          "command": "npmCatalog.refreshCategory",
-          "when": "view == npmCatalogView && viewItem == category",
-          "group": "inline"
-        }
       ]
+    },
+    "configuration": {
+      "title": "NPM Catalog",
+      "properties": {
+        "npmCatalog.pageSize": {
+          "type": "number",
+          "default": 20,
+          "minimum": 5,
+          "maximum": 50,
+          "description": "How many packages to load per page."
+        },
+        "npmCatalog.cacheTtlHours": {
+          "type": "number",
+          "default": 24,
+          "minimum": 0,
+          "description": "How long cached category results stay fresh, in hours."
+        },
+        "npmCatalog.packageManager": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "npm",
+            "yarn",
+            "pnpm",
+            "bun"
+          ],
+          "default": "auto",
+          "description": "Package manager used for install commands. \"auto\" detects it from the lock file."
+        }
+      }
     }
   },
   "scripts": {
