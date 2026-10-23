@@ -2,7 +2,7 @@
   "name": "npm-catalog",
   "displayName": "NPM Catalog",
   "description": "Discover, compare and install npm packages without leaving VS Code — curated categories, live search, download trends, bundle size, and an outdated/vulnerable dependency checker for your project.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "Denys-Shovkovyi",
   "license": "MIT",
   "icon": "media/marketplace-icon.png",
