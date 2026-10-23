@@ -38,20 +38,65 @@ function resolveManager(folder) {
   return target ? detectManager(target.uri.fsPath) : 'npm';
 }
 
-function readInstalledNames() {
-  const names = new Set();
-  for (const folder of getWorkspaceFolders()) {
-    try {
-      const raw = fs.readFileSync(path.join(folder.uri.fsPath, 'package.json'), 'utf8');
-      const manifest = JSON.parse(raw);
-      for (const field of DEPENDENCY_FIELDS) {
-        Object.keys(manifest[field] || {}).forEach((name) => names.add(name));
-      }
-    } catch {
-      continue;
-    }
+function readJson(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
   }
-  return names;
 }
 
-module.exports = { getWorkspaceFolders, pickWorkspaceFolder, resolveManager, readInstalledNames };
+function readInstalledVersion(folderPath, name) {
+  const manifest = readJson(path.join(folderPath, 'node_modules', ...name.split('/'), 'package.json'));
+  return manifest && typeof manifest.version === 'string' ? manifest.version : null;
+}
+
+function readProject(folder) {
+  const folderPath = folder.uri.fsPath;
+  const manifest = readJson(path.join(folderPath, 'package.json'));
+  if (!manifest) return null;
+
+  const dependencies = [];
+  for (const field of DEPENDENCY_FIELDS) {
+    for (const [name, range] of Object.entries(manifest[field] || {})) {
+      if (dependencies.some((dep) => dep.name === name)) continue;
+      dependencies.push({
+        name,
+        range: String(range),
+        field,
+        installed: readInstalledVersion(folderPath, name)
+      });
+    }
+  }
+
+  return {
+    folder: folderPath,
+    folderName: folder.name,
+    name: manifest.name || folder.name,
+    version: manifest.version || null,
+    manager: resolveManager(folder),
+    dependencies
+  };
+}
+
+function readInstalled() {
+  const installed = {};
+  for (const folder of getWorkspaceFolders()) {
+    const project = readProject(folder);
+    if (!project) continue;
+    for (const dep of project.dependencies) {
+      if (installed[dep.name]) continue;
+      installed[dep.name] = { range: dep.range, field: dep.field, version: dep.installed, folder: project.folderName };
+    }
+  }
+  return installed;
+}
+
+module.exports = {
+  LOCKFILES,
+  getWorkspaceFolders,
+  pickWorkspaceFolder,
+  resolveManager,
+  readProject,
+  readInstalled
+};

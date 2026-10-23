@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Redesigned sidebar with Discover / Project / Saved views, VS Code codicons instead of emoji, category chips, sorting and a compact list mode.
+- Package cards show weekly downloads, dependents, last publish (stale highlighted), license, keywords and a popularity bar.
+- Search autocomplete with package suggestions and editable recent searches; `/` focuses search; clicking a keyword searches it.
+- Project Starters are shown on one page with the exact command to run.
+- New Project view: outdated (major/minor/patch), vulnerable and deprecated dependencies, per-package and bulk update, uninstall, filter.
+- New details panel: two-column layout, npm/yarn/pnpm/bun switcher, one-year download chart with trend, bundle size, TypeScript and module format badges, security advisories, GitHub stats, Versions and Dependencies tabs, navigation between packages with Back.
+- New commands: Open Package by Name…, Check Project Dependencies.
+- Recently viewed packages.
+
 - Fixed: expanding a cached category no longer silently loads another page.
 - Fixed: package details are HTML-escaped and rendered under a strict CSP; README is rendered by a safe Markdown renderer (lists, tables, quotes, images, badges).
 - Cache is now in-memory with a TTL (`npmCatalog.cacheTtlHours`) and persisted via globalState.

@@ -6,6 +6,11 @@ const MAX_ATTEMPTS = 3;
 const MAX_RETRY_AFTER_MS = 5000;
 const RETRY_BASE_DELAY_MS = 400;
 const REDIRECT_STATUSES = [301, 302, 307, 308];
+const MAX_CARD_KEYWORDS = 4;
+
+function encodePackageName(name) {
+  return String(name).startsWith('@') ? `@${encodeURIComponent(String(name).slice(1))}` : encodeURIComponent(name);
+}
 
 function createError(message, retryable, status) {
   const error = new Error(message);
@@ -49,11 +54,19 @@ class NpmRegistryClient {
     }
   }
 
-  async _getJson(url, attempts = MAX_ATTEMPTS) {
+  _getJson(url, attempts = MAX_ATTEMPTS, options = {}) {
+    return this._requestJson(url, attempts, options);
+  }
+
+  _postJson(url, body, attempts = MAX_ATTEMPTS) {
+    return this._requestJson(url, attempts, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async _requestJson(url, attempts, options) {
     let lastError;
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        return await this._runQueued(() => this._rawGetJson(url, MAX_REDIRECTS));
+        return await this._runQueued(() => this._rawGetJson(url, MAX_REDIRECTS, options));
       } catch (err) {
         lastError = err;
         if (!err.retryable || attempt === attempts) break;
@@ -63,16 +76,21 @@ class NpmRegistryClient {
     throw lastError;
   }
 
-  _rawGetJson(url, redirectsLeft) {
+  _rawGetJson(url, redirectsLeft, options = {}) {
     return new Promise((resolve, reject) => {
       const fail = (err) => {
         const cause = err && err.cause && err.cause.message ? ` (${err.cause.message})` : '';
         reject(err && err.retryable !== undefined ? err : createError(`${err.message}${cause}`, true));
       };
 
-      const request = https.get(url, { headers: { 'User-Agent': this.userAgent } }, (res) => {
+      const headers = { 'User-Agent': this.userAgent, ...(options.headers || {}) };
+      if (options.body) {
+        headers['Content-Type'] = 'application/json';
+        headers['Content-Length'] = Buffer.byteLength(options.body);
+      }
+      const request = https.request(url, { method: options.method || 'GET', headers }, (res) => {
         try {
-          this._handleResponse(url, redirectsLeft, res, resolve, reject);
+          this._handleResponse(url, redirectsLeft, res, resolve, reject, options);
         } catch (err) {
           res.resume();
           fail(createError(`Response handling failed: ${err.message}`, false));
@@ -83,10 +101,11 @@ class NpmRegistryClient {
         request.destroy(createError(`Request timed out for ${url}`, true));
       });
       request.on('error', fail);
+      request.end(options.body);
     });
   }
 
-  _handleResponse(url, redirectsLeft, res, resolve, reject) {
+  _handleResponse(url, redirectsLeft, res, resolve, reject, options) {
     if (REDIRECT_STATUSES.includes(res.statusCode) && res.headers.location) {
       res.resume();
       if (redirectsLeft <= 0) {
@@ -94,7 +113,7 @@ class NpmRegistryClient {
         return;
       }
       const next = new URL(res.headers.location, url).toString();
-      resolve(this._rawGetJson(next, redirectsLeft - 1));
+      resolve(this._rawGetJson(next, redirectsLeft - 1, options));
       return;
     }
 
@@ -130,9 +149,30 @@ class NpmRegistryClient {
 
     return {
       fetched: json.objects.length,
+      total: typeof json.total === 'number' ? json.total : null,
       packages: json.objects
         .filter((entry) => entry && entry.package && entry.package.name)
-        .map((entry) => this._toPackageSummary(entry.package, installType))
+        .map((entry) => this._fromSearchEntry(entry, installType))
+    };
+  }
+
+  _fromSearchEntry(entry, installType) {
+    const pkg = entry.package;
+    const links = pkg.links || {};
+    const downloads = entry.downloads || {};
+    const dependents = Number(entry.dependents);
+    return {
+      ...this._toPackageSummary(pkg, installType),
+      weeklyDownloads: typeof downloads.weekly === 'number' ? downloads.weekly : null,
+      monthlyDownloads: typeof downloads.monthly === 'number' ? downloads.monthly : null,
+      dependents: Number.isFinite(dependents) ? dependents : null,
+      updated: pkg.date || entry.updated || null,
+      license: typeof pkg.license === 'string' ? pkg.license : null,
+      publisher: (pkg.publisher && pkg.publisher.username) || null,
+      maintainers: Array.isArray(pkg.maintainers) ? pkg.maintainers.length : null,
+      keywords: Array.isArray(pkg.keywords) ? pkg.keywords.slice(0, MAX_CARD_KEYWORDS) : [],
+      repositoryUrl: links.repository || null,
+      homepage: links.homepage || null
     };
   }
 
@@ -147,15 +187,36 @@ class NpmRegistryClient {
   }
 
   async getExactPackage(name, installType) {
-    const manifest = await this._getJson(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`);
-    return this._toPackageSummary(
-      { name: manifest.name || name, description: manifest.description, version: manifest.version },
-      installType
-    );
+    const [manifest, weeklyDownloads] = await Promise.all([
+      this.getLatestManifest(name),
+      this.getWeeklyDownloads(name)
+    ]);
+    return {
+      ...this._toPackageSummary(
+        { name: manifest.name || name, description: manifest.description, version: manifest.version },
+        installType
+      ),
+      weeklyDownloads,
+      license: typeof manifest.license === 'string' ? manifest.license : null,
+      keywords: Array.isArray(manifest.keywords) ? manifest.keywords.slice(0, MAX_CARD_KEYWORDS) : []
+    };
+  }
+
+  getLatestManifest(name) {
+    return this._getJson(`https://registry.npmjs.org/${encodePackageName(name)}/latest`);
   }
 
   getPackageMetadata(name) {
-    return this._getJson(`https://registry.npmjs.org/${encodeURIComponent(name)}`);
+    return this._getJson(`https://registry.npmjs.org/${encodePackageName(name)}`);
+  }
+
+  async packageExists(name) {
+    try {
+      await this._getJson(`https://registry.npmjs.org/${encodePackageName(name)}/latest`, 1);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async getWeeklyDownloads(name) {
@@ -167,6 +228,58 @@ class NpmRegistryClient {
       return typeof data.downloads === 'number' ? data.downloads : null;
     } catch {
       return null;
+    }
+  }
+
+  async getDownloadsRange(name) {
+    try {
+      const data = await this._getJson(
+        `https://api.npmjs.org/downloads/range/last-year/${encodeURIComponent(name)}`,
+        1
+      );
+      return Array.isArray(data.downloads) ? data.downloads : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getAdvisories(versionsByName) {
+    if (!Object.keys(versionsByName).length) return {};
+    try {
+      const data = await this._postJson('https://registry.npmjs.org/-/npm/v1/security/advisories/bulk', versionsByName, 2);
+      return data && typeof data === 'object' ? data : {};
+    } catch {
+      return null;
+    }
+  }
+
+  async getBundleSize(name, version) {
+    try {
+      const spec = version ? `${name}@${version}` : name;
+      return await this._getJson(`https://bundlephobia.com/api/size?package=${encodeURIComponent(spec)}`, 1);
+    } catch {
+      return null;
+    }
+  }
+
+  async getNameSuggestions(term, size) {
+    try {
+      const data = await this._getJson(
+        `https://api.npms.io/v2/search/suggestions?q=${encodeURIComponent(term)}&size=${size}`,
+        1
+      );
+      return Array.isArray(data)
+        ? data
+            .filter((entry) => entry && entry.package && entry.package.name)
+            .map((entry) => ({
+              name: entry.package.name,
+              description: entry.package.description || '',
+              npmUrl: `https://www.npmjs.com/package/${entry.package.name}`,
+              installType: 'npm'
+            }))
+        : [];
+    } catch {
+      return [];
     }
   }
 

@@ -1,4 +1,4 @@
-const STORE_KEY = 'npmCatalog.cache.v2';
+const STORE_KEY = 'npmCatalog.cache.v3';
 const PERSIST_DELAY_MS = 500;
 
 class PackageCache {

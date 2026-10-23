@@ -2,35 +2,47 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { readInstalledNames } = require('./projectEnv');
+const { readInstalled, resolveManager, getWorkspaceFolders } = require('./projectEnv');
 
 const SEARCH_GROUP = 'Search Results';
-const FAVORITES_KEY = 'favorites';
+const ALL_CATEGORY = '__all__';
 
 const GROUP_STYLES = {
-  'Project Starters': ['🚀', '--vscode-charts-orange'],
-  Frontend: ['🖥️', '--vscode-charts-blue'],
-  'Backend (Node.js)': ['🗄️', '--vscode-charts-green'],
-  'Mobile (React Native)': ['📱', '--vscode-charts-purple'],
-  'Full-Stack Frameworks': ['🌐', '--vscode-charts-red'],
-  'DevOps & Tooling': ['🛠️', '--vscode-charts-yellow'],
-  'Shared & Utilities': ['📚', '--vscode-charts-blue']
+  'Project Starters': ['rocket', '--vscode-charts-orange', 'Scaffold a new app in one command'],
+  Frontend: ['browser', '--vscode-charts-blue', 'UI, styling, state, forms, testing'],
+  'Backend (Node.js)': ['server', '--vscode-charts-green', 'APIs, databases, auth, queues'],
+  'Mobile (React Native)': ['device-mobile', '--vscode-charts-purple', 'Navigation, UI kits, native modules'],
+  'Full-Stack Frameworks': ['layers', '--vscode-charts-red', 'Meta-frameworks and SSR'],
+  'DevOps & Tooling': ['tools', '--vscode-charts-yellow', 'Monorepos, CI, containers, linting'],
+  'Shared & Utilities': ['library', '--vscode-charts-blue', 'HTTP, dates, helpers, validation']
 };
 
 function categoryKey(groupName, categoryName) {
   return `${groupName}::${categoryName}`;
 }
 
+function normalizeSpec(raw) {
+  const isObjectForm = typeof raw === 'object' && raw !== null;
+  return {
+    query: isObjectForm ? raw.query : raw,
+    installType: isObjectForm ? raw.installType || 'npm' : 'npm',
+    exact: isObjectForm ? Boolean(raw.exact) : false
+  };
+}
+
 class CatalogViewProvider {
-  constructor(context, packageService, userStore, actions) {
+  constructor(context, packageService, projectService, userStore, actions) {
     this.context = context;
     this.packageService = packageService;
+    this.projectService = projectService;
     this.userStore = userStore;
     this.actions = actions;
     this.view = null;
     this.states = new Map();
     this.specs = new Map();
     this.searchTerm = null;
+    this.suggestions = [];
+    this.project = { status: 'idle', data: null, progress: null, error: null };
     this._loadCategoryTree();
   }
 
@@ -40,19 +52,25 @@ class CatalogViewProvider {
     this.specs.clear();
 
     this.groups = Object.keys(tree).map((groupName) => {
-      const [icon, color] = GROUP_STYLES[groupName] || ['📦', '--vscode-charts-blue'];
-      const categories = Object.keys(tree[groupName]).map((categoryName) => {
-        const raw = tree[groupName][categoryName];
-        const isObjectForm = typeof raw === 'object' && raw !== null;
-        const key = categoryKey(groupName, categoryName);
+      const [icon, color, tagline] = GROUP_STYLES[groupName] || ['package', '--vscode-charts-blue', ''];
+      const entries = Object.entries(tree[groupName]).map(([name, raw]) => [name, normalizeSpec(raw)]);
+      const allExact = entries.length > 1 && entries.every(([, spec]) => spec.exact);
+
+      let categories;
+      if (allExact) {
+        const key = categoryKey(groupName, ALL_CATEGORY);
         this.specs.set(key, {
-          query: isObjectForm ? raw.query : raw,
-          installType: isObjectForm ? raw.installType || 'npm' : 'npm',
-          exact: isObjectForm ? Boolean(raw.exact) : false
+          exactList: entries.map(([label, spec]) => ({ label, query: spec.query, installType: spec.installType }))
         });
-        return { key, name: categoryName };
-      });
-      return { name: groupName, icon, color, categories };
+        categories = [{ key, name: 'All starters' }];
+      } else {
+        categories = entries.map(([name, spec]) => {
+          const key = categoryKey(groupName, name);
+          this.specs.set(key, spec);
+          return { key, name };
+        });
+      }
+      return { name: groupName, icon, color, tagline, categories };
     });
   }
 
@@ -70,11 +88,11 @@ class CatalogViewProvider {
 
   _html(webview, mediaRoot) {
     const nonce = crypto.randomBytes(16).toString('base64');
-    const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'catalog.css'));
-    const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'catalog.js'));
+    const uri = (...parts) => webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, ...parts));
     const csp = [
       "default-src 'none'",
-      `style-src ${webview.cspSource}`,
+      `style-src ${webview.cspSource} 'unsafe-inline'`,
+      `font-src ${webview.cspSource}`,
       `script-src 'nonce-${nonce}'`,
       `img-src ${webview.cspSource} https: data:`
     ].join('; ');
@@ -85,15 +103,22 @@ class CatalogViewProvider {
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="stylesheet" href="${cssUri}">
+<link rel="stylesheet" href="${uri('codicons', 'codicon.css')}">
+<link rel="stylesheet" href="${uri('catalog.css')}">
 </head>
 <body>
-  <form id="searchForm" class="search" role="search">
-    <input id="searchInput" type="search" placeholder="Search npm packages…" list="searchHistory" autocomplete="off" aria-label="Search npm packages">
-    <datalist id="searchHistory"></datalist>
-  </form>
+  <header class="top">
+    <form id="searchForm" class="search" role="search" autocomplete="off">
+      <span class="codicon codicon-search search-icon" aria-hidden="true"></span>
+      <input id="searchInput" type="text" placeholder="Search npm packages" aria-label="Search npm packages" aria-autocomplete="list" aria-controls="suggest" spellcheck="false">
+      <kbd class="search-hint" aria-hidden="true">/</kbd>
+      <button id="searchClear" class="search-clear" type="button" title="Clear search" aria-label="Clear search" hidden><span class="codicon codicon-close"></span></button>
+      <div id="suggest" class="suggest" role="listbox" hidden></div>
+    </form>
+    <nav id="views" class="views" role="tablist"></nav>
+  </header>
   <main id="list"></main>
-  <script nonce="${nonce}" src="${jsUri}"></script>
+  <script nonce="${nonce}" src="${uri('catalog.js')}"></script>
 </body>
 </html>`;
   }
@@ -106,36 +131,51 @@ class CatalogViewProvider {
     if (this.view) this.view.description = this.searchTerm ? `"${this.searchTerm}"` : undefined;
   }
 
+  _userData() {
+    return {
+      favorites: this.userStore.getFavorites(),
+      recent: this.userStore.getRecent(),
+      installed: readInstalled(),
+      history: this.userStore.getSearchHistory(),
+      manager: resolveManager(),
+      hasWorkspace: getWorkspaceFolders().length > 0
+    };
+  }
+
   _snapshot() {
     return {
       type: 'init',
       groups: this.groups,
-      favorites: this.userStore.getFavorites(),
-      installed: [...readInstalledNames()],
-      history: this.userStore.getSearchHistory(),
+      ...this._userData(),
       searchTerm: this.searchTerm,
       searchKey: this.searchTerm ? categoryKey(SEARCH_GROUP, this.searchTerm) : null
     };
   }
 
   refreshView() {
-    this._post({
-      type: 'userdata',
-      favorites: this.userStore.getFavorites(),
-      installed: [...readInstalledNames()],
-      history: this.userStore.getSearchHistory()
-    });
+    this._post({ type: 'userdata', ...this._userData() });
+  }
+
+  onProjectFilesChanged() {
+    this.refreshView();
+    if (this.project.status !== 'idle') this.loadProject();
   }
 
   refreshAll() {
     this.packageService.clearAll();
+    this.projectService.clear();
     this.states.clear();
     this._loadCategoryTree();
     this._post(this._snapshot());
+    if (this.project.status !== 'idle') this.loadProject();
   }
 
   focusSearch() {
     this._post({ type: 'focusSearch' });
+  }
+
+  showTab(tab) {
+    this._post({ type: 'showTab', tab });
   }
 
   async setSearch(term) {
@@ -160,19 +200,57 @@ class CatalogViewProvider {
     vscode.commands.executeCommand('setContext', 'npmCatalog.hasActiveSearch', Boolean(this.searchTerm));
   }
 
+  async loadProject() {
+    if (!this.projectService.hasProjects()) {
+      this.project = { status: 'empty', data: null, progress: null, error: null };
+      this._sendProject();
+      return;
+    }
+    this.project = { ...this.project, status: 'loading', progress: null, error: null };
+    this._sendProject();
+    try {
+      const data = await this.projectService.scan((progress) => {
+        this.project.progress = progress;
+        this._post({ type: 'projectProgress', progress });
+      });
+      this.project = { status: 'ready', data, progress: null, error: null };
+    } catch (err) {
+      this.project = { ...this.project, status: 'error', error: err.message };
+    }
+    this._sendProject();
+  }
+
+  _sendProject() {
+    this._post({ type: 'project', ...this.project });
+  }
+
   _handleMessage(message) {
     if (!message || typeof message.type !== 'string') return;
     const key = typeof message.key === 'string' ? message.key : null;
+    const name = typeof message.name === 'string' ? message.name : null;
 
     switch (message.type) {
       case 'ready':
         this._post(this._snapshot());
+        if (this.project.status !== 'idle') this._sendProject();
         break;
       case 'search':
         if (typeof message.term === 'string' && message.term.trim()) this.setSearch(message.term.trim());
         break;
       case 'clearSearch':
         this.clearSearch();
+        break;
+      case 'suggest':
+        this._suggest(message.term, message.seq);
+        break;
+      case 'removeSearch':
+        if (typeof message.term === 'string') this.userStore.removeSearch(message.term);
+        break;
+      case 'clearHistory':
+        this.userStore.clearSearchHistory();
+        break;
+      case 'clearRecent':
+        this.userStore.clearRecent();
         break;
       case 'openCategory':
         if (key) this._openCategory(key);
@@ -183,35 +261,78 @@ class CatalogViewProvider {
       case 'refreshCategory':
         if (key) this._refreshCategory(key);
         break;
+      case 'loadProject':
+        if (message.force) this.projectService.clear();
+        this.loadProject();
+        break;
+      case 'updateDeps':
+        if (Array.isArray(message.names) && message.names.length) {
+          this.actions.update(message.folder, message.names.filter((item) => typeof item === 'string'), message.dev === true);
+        }
+        break;
+      case 'uninstall':
+        if (name) this.actions.uninstall(message.folder, name);
+        break;
+      case 'openManifest':
+        this.actions.openManifest(message.folder);
+        break;
+      case 'initProject':
+        this.actions.initProject();
+        break;
+      case 'openUrl':
+        this.actions.openUrl(message.url);
+        break;
       case 'openPackage':
       case 'install':
       case 'copy':
       case 'toggleFavorite':
-        this._handlePackageAction(message.type, key, message.name);
+        if (name) this._handlePackageAction(message.type, key, name, message.dev === true);
         break;
     }
   }
 
-  _handlePackageAction(type, key, name) {
+  async _suggest(term, seq) {
+    if (typeof term !== 'string' || term.trim().length < 2) return;
+    try {
+      const packages = await this.packageService.suggest(term.trim());
+      this.suggestions = packages;
+      this._post({ type: 'suggestions', seq, term, packages });
+    } catch {
+      this._post({ type: 'suggestions', seq, term, packages: [] });
+    }
+  }
+
+  _handlePackageAction(type, key, name, dev) {
     const pkg = this._findPackage(key, name);
-    if (!pkg) return;
-    if (type === 'openPackage') this.actions.showDetails(pkg);
-    else if (type === 'install') this.actions.install(pkg);
-    else if (type === 'copy') this.actions.copy(pkg);
-    else if (this.userStore.isFavorite(pkg.name)) this.userStore.removeFavorite(pkg.name);
-    else this.userStore.addFavorite(pkg);
+    if (type === 'openPackage') {
+      this.userStore.addRecent(pkg);
+      this.actions.showDetails(pkg);
+    } else if (type === 'install') this.actions.install(pkg, dev);
+    else if (type === 'copy') this.actions.copy(pkg, dev);
+    else this.userStore.toggleFavorite(pkg);
   }
 
   _findPackage(key, name) {
     const pools = [];
-    if (key === FAVORITES_KEY) pools.push(this.userStore.getFavorites());
-    else if (this.states.has(key)) pools.push(this.states.get(key).packages);
-    pools.push(this.userStore.getFavorites());
+    if (key && this.states.has(key)) pools.push(this.states.get(key).packages);
+    pools.push(this.userStore.getFavorites(), this.userStore.getRecent(), this.suggestions);
+    for (const state of this.states.values()) pools.push(state.packages);
     for (const pool of pools) {
       const found = pool.find((pkg) => pkg.name === name);
       if (found) return { ...found, installType: found.installType || 'npm' };
     }
-    return null;
+    return this._projectPackage(name);
+  }
+
+  _projectPackage(name) {
+    const projects = (this.project.data && this.project.data.projects) || [];
+    for (const project of projects) {
+      const dep = project.dependencies.find((item) => item.name === name);
+      if (dep) {
+        return { name, description: dep.description, version: dep.latest || dep.current, installType: 'npm', npmUrl: `https://www.npmjs.com/package/${name}` };
+      }
+    }
+    return { name, description: '', installType: 'npm', npmUrl: `https://www.npmjs.com/package/${name}` };
   }
 
   _stateFor(key) {
@@ -219,8 +340,8 @@ class CatalogViewProvider {
     if (!state) {
       const cached = this.packageService.getCached(key);
       state = cached
-        ? { status: 'ready', packages: cached.packages, hasMore: cached.hasMore, error: null }
-        : { status: 'idle', packages: [], hasMore: false, error: null };
+        ? { status: 'ready', packages: cached.packages, hasMore: cached.hasMore, total: cached.total, error: null }
+        : { status: 'idle', packages: [], hasMore: false, total: null, error: null };
       this.states.set(key, state);
     }
     return state;
@@ -259,7 +380,7 @@ class CatalogViewProvider {
 
     try {
       const page = await task();
-      this.states.set(key, { status: 'ready', packages: page.packages, hasMore: page.hasMore, error: null });
+      this.states.set(key, { status: 'ready', packages: page.packages, hasMore: page.hasMore, total: page.total, error: null });
     } catch (err) {
       this.states.set(key, { ...previous, status: 'error', error: err.message });
     }
