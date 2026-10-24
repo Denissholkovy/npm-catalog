@@ -5,13 +5,14 @@ const { ProjectService } = require('./projectService');
 const { CatalogViewProvider } = require('./catalogViewProvider');
 const { PackageDetailsPanel } = require('./packageDetailsPanel');
 const { UserStore } = require('./userStore');
-const { buildCommand, buildUpdateCommand, buildUninstallCommand, isScaffold } = require('./installCommand');
+const { buildCommand, buildUpdateCommand, buildBulkUpdateCommand, buildUninstallCommand, isScaffold } = require('./installCommand');
 const { LOCKFILES, getWorkspaceFolders, pickWorkspaceFolder, resolveManager, readInstalled } = require('./projectEnv');
 const { safeHttpUrl } = require('./htmlUtils');
 
 const TERMINAL_NAME = 'NPM Catalog';
 const WATCH_DEBOUNCE_MS = 400;
-const WATCHED_FILES = `{package.json,${LOCKFILES.map(([file]) => file).join(',')}}`;
+const WATCHED_FILES = `{**/package.json,pnpm-workspace.yaml,lerna.json,${LOCKFILES.map(([file]) => file).join(',')}}`;
+const IGNORED_PATH = /[\\/]node_modules[\\/]/;
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
 
 class ExtensionController {
@@ -23,8 +24,11 @@ class ExtensionController {
     this.detailsHandlers = {
       install: (pkg, options) => this._install(pkg, options),
       copy: (text) => this._copyText(text),
-      update: (name, dev) => this._update(undefined, [name], dev),
-      uninstall: (name) => this._uninstall(undefined, name),
+      update: (name, dev) => this._updateInstalled(name, dev),
+      uninstall: (name) => {
+        const info = readInstalled()[name];
+        this._uninstall(info ? info.path : undefined, name);
+      },
       toggleFavorite: (pkg) => this.userStore.toggleFavorite(pkg),
       isFavorite: (name) => this.userStore.isFavorite(name),
       installedInfo: (name) => readInstalled()[name] || null,
@@ -36,7 +40,8 @@ class ExtensionController {
       showDetails: (pkg) => this._showDetails(pkg),
       install: (pkg, dev) => this._install(pkg, { dev }),
       copy: (pkg, dev) => this._copyText(this._commandFor(pkg, dev)),
-      update: (folder, names, dev) => this._update(folder, names, dev),
+      update: (folder, names, dev, scope) => this._update(folder, names, dev, scope),
+      updateAll: (folder, scope, stats) => this._updateAll(folder, scope, stats),
       uninstall: (folder, name) => this._uninstall(folder, name),
       openManifest: (folder) => this._openManifest(folder),
       initProject: () => this._initProject(),
@@ -77,6 +82,8 @@ class ExtensionController {
       this.viewProvider.showTab('project');
     });
 
+    this._registerCommand('npmCatalog.updateAllDependencies', () => this._updateAllFromPalette());
+
     this._registerCommand('npmCatalog.openPackage', async () => {
       const name = await vscode.window.showInputBox({
         title: 'Open npm package',
@@ -93,7 +100,8 @@ class ExtensionController {
 
   _watchProjectChanges() {
     let timer = null;
-    const scheduleRefresh = () => {
+    const scheduleRefresh = (uri) => {
+      if (uri && IGNORED_PATH.test(uri.fsPath)) return;
       clearTimeout(timer);
       timer = setTimeout(() => {
         this.viewProvider.onProjectFilesChanged();
@@ -142,63 +150,156 @@ class ExtensionController {
     vscode.window.setStatusBarMessage(`$(check) Copied: ${text}`, 2500);
   }
 
-  _folderByPath(folderPath) {
-    return getWorkspaceFolders().find((folder) => folder.uri.fsPath === folderPath);
+  _targetFor(folderPath) {
+    const root = getWorkspaceFolders().find(
+      (folder) => folderPath === folder.uri.fsPath || folderPath.startsWith(folder.uri.fsPath + path.sep)
+    );
+    if (!root) return null;
+    const relative = path.relative(root.uri.fsPath, folderPath).split(path.sep).join('/');
+    return {
+      uri: { fsPath: folderPath },
+      name: relative ? `${root.name}/${relative}` : root.name,
+      manager: resolveManager(root)
+    };
   }
 
   async _resolveFolder(folderPath) {
-    const folder = folderPath ? this._folderByPath(folderPath) : await pickWorkspaceFolder();
-    if (!folder) vscode.window.showWarningMessage('Open a project folder first.');
-    return folder;
+    if (folderPath) {
+      const target = this._targetFor(folderPath);
+      if (!target) vscode.window.showWarningMessage('That folder is no longer part of the workspace.');
+      return target;
+    }
+    const folder = await pickWorkspaceFolder();
+    if (!folder) {
+      vscode.window.showWarningMessage('Open a project folder first.');
+      return null;
+    }
+    return { uri: folder.uri, name: folder.name, manager: resolveManager(folder) };
   }
 
   async _install(pkg, { dev = false, version, manager } = {}) {
     const scaffold = isScaffold(pkg.installType);
-    const folder = scaffold ? getWorkspaceFolders()[0] : await this._resolveFolder();
-    if (!scaffold && !folder) return;
+    const target = scaffold ? null : await this._resolveFolder();
+    if (!scaffold && !target) return;
 
     const command = buildCommand({
       name: pkg.name,
       installType: pkg.installType,
-      manager: manager || resolveManager(folder),
+      manager: manager || (target ? target.manager : resolveManager()),
       dev,
       version
     });
-    this._run(scaffold ? undefined : folder, command);
+    this._run(target, command);
   }
 
-  async _update(folderPath, names, dev) {
-    const folder = await this._resolveFolder(folderPath);
-    if (!folder) return;
+  async _update(folderPath, names, dev, scope) {
+    const target = await this._resolveFolder(folderPath);
+    if (!target) return;
+    if (scope === 'workspace') {
+      this._run(target, buildBulkUpdateCommand({ names, workspaces: true, manager: target.manager }));
+      return;
+    }
     const installed = readInstalled();
     const isDev = dev || names.every((name) => installed[name] && installed[name].field === 'devDependencies');
-    this._run(folder, buildUpdateCommand({ names, manager: resolveManager(folder), dev: isDev }));
+    this._run(target, buildUpdateCommand({ names, manager: target.manager, dev: isDev }));
+  }
+
+  _updateInstalled(name, dev) {
+    const info = readInstalled()[name];
+    if (!info) return this._update(undefined, [name], dev);
+    if (info.monorepo) return this._update(info.root, [name], dev, 'workspace');
+    return this._update(info.path, [name], dev);
+  }
+
+  async _updateAllFromPalette() {
+    const data = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'NPM Catalog: checking dependencies…' },
+      () => this.viewProvider.ensureProject()
+    );
+    const workspaces = (data && data.workspaces) || [];
+    if (!workspaces.length) {
+      vscode.window.showWarningMessage('No package.json found in this workspace.');
+      return;
+    }
+    const workspace =
+      workspaces.length === 1
+        ? workspaces[0]
+        : await vscode.window.showQuickPick(
+            workspaces.map((item) => ({ label: item.folderName, description: item.isMonorepo ? `monorepo · ${item.packages.length} packages` : '', item })),
+            { placeHolder: 'Which project should be updated?' }
+          ).then((choice) => choice && choice.item);
+    if (!workspace) return;
+    const scope = workspace.isMonorepo ? 'workspace' : 'package';
+    this.viewProvider.updateAll(workspace.root, scope);
+  }
+
+  async _updateAll(folderPath, scope, stats) {
+    if (!stats.outdated) {
+      vscode.window.showInformationMessage('All dependencies are already up to date.');
+      return;
+    }
+    const target = await this._resolveFolder(folderPath);
+    if (!target) return;
+    const workspaces = scope === 'workspace';
+    const where = workspaces ? `all packages of ${target.name}` : target.name;
+    const command = (options) => buildBulkUpdateCommand({ ...options, workspaces, manager: target.manager });
+    const plural = (count) => `${count} package${count === 1 ? '' : 's'}`;
+
+    const choices = [];
+    if (stats.vulnerable.length) {
+      choices.push({
+        label: '$(shield) Fix vulnerable packages',
+        description: plural(stats.vulnerable.length),
+        detail: command({ names: stats.vulnerable }),
+        options: { names: stats.vulnerable }
+      });
+    }
+    choices.push(
+      {
+        label: '$(check) Safe update — minor & patch',
+        description: `up to ${plural(stats.outdated - stats.major)} · keeps major versions`,
+        detail: command({ target: 'minor' }),
+        options: { target: 'minor' }
+      },
+      {
+        label: '$(rocket) Everything to latest',
+        description: `${plural(stats.outdated)}${stats.major ? ` · ${stats.major} major, may need code changes` : ''}`,
+        detail: command({}),
+        options: {}
+      }
+    );
+
+    const choice = await vscode.window.showQuickPick(choices, {
+      title: `Update dependencies in ${where}`,
+      placeHolder: 'Runs npm-check-updates, rewrites package.json ranges, then installs',
+      matchOnDescription: true
+    });
+    if (choice) this._run(target, command(choice.options));
   }
 
   async _uninstall(folderPath, name) {
-    const folder = await this._resolveFolder(folderPath);
-    if (!folder) return;
+    const target = await this._resolveFolder(folderPath);
+    if (!target) return;
     const confirm = await vscode.window.showWarningMessage(
-      `Remove ${name} from ${folder.name}?`,
+      `Remove ${name} from ${target.name}?`,
       { modal: true, detail: 'The package will be uninstalled and removed from package.json.' },
       'Uninstall'
     );
     if (confirm !== 'Uninstall') return;
-    this._run(folder, buildUninstallCommand({ names: [name], manager: resolveManager(folder) }));
+    this._run(target, buildUninstallCommand({ names: [name], manager: target.manager }));
   }
 
   async _openManifest(folderPath) {
-    const folder = folderPath ? this._folderByPath(folderPath) : getWorkspaceFolders()[0];
-    if (!folder) return;
-    const document = await vscode.workspace.openTextDocument(path.join(folder.uri.fsPath, 'package.json'));
+    const target = folderPath || (getWorkspaceFolders()[0] && getWorkspaceFolders()[0].uri.fsPath);
+    if (!target) return;
+    const document = await vscode.workspace.openTextDocument(path.join(target, 'package.json'));
     vscode.window.showTextDocument(document);
   }
 
   async _initProject() {
-    const folder = await this._resolveFolder();
-    if (!folder) return;
-    const manager = resolveManager(folder);
-    this._run(folder, `${manager} init${manager === 'npm' ? ' -y' : ''}`);
+    const target = await this._resolveFolder();
+    if (!target) return;
+    this._run(target, `${target.manager} init${target.manager === 'npm' ? ' -y' : ''}`);
   }
 
   _openUrl(url) {

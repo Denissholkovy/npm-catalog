@@ -35,9 +35,18 @@ an eye on the dependencies you already have.
 ### Project
 - Scans every `package.json` in the workspace and shows **outdated**
   (major / minor / patch), **vulnerable** and **deprecated** dependencies.
-- Update a single package or every outdated package in a section at once.
-- Filter and search the dependency list; refreshes automatically when
-  `package.json` or a lock file changes.
+- **Monorepo support** — detects `workspaces` (npm, yarn, bun),
+  `pnpm-workspace.yaml` and `lerna.json`. The *Whole monorepo* view merges
+  dependencies from every package, shows where each one is used and flags
+  **version drift** (the same dependency on different ranges in different
+  packages). Drill into any package for its own list.
+- **Update everything in one command** — *Update all…* (or *NPM Catalog:
+  Update All Dependencies…* in the Command Palette) offers: fix vulnerable
+  packages, safe update (minor & patch only) or everything to latest. It runs
+  `npm-check-updates` (with `--workspaces --root` in a monorepo) and then
+  installs with your package manager.
+- Update or uninstall a single package; filter and search the list;
+  refreshes automatically when any `package.json` or lock file changes.
 
 ### Saved
 - Star packages to keep them in **Saved**; recently viewed packages are
@@ -53,8 +62,8 @@ an eye on the dependencies you already have.
 4. **Project** — check what is outdated or vulnerable and update it.
 
 Commands (Command Palette → “NPM Catalog”): Search Packages, Open Package by
-Name…, Check Project Dependencies, Refresh All Categories, Clear Search
-History.
+Name…, Check Project Dependencies, Update All Dependencies…, Refresh All
+Categories, Clear Search History.
 
 ## Settings
 

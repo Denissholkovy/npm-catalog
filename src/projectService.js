@@ -1,8 +1,9 @@
-const { getWorkspaceFolders, readProject } = require('./projectEnv');
+const { readWorkspaces } = require('./projectEnv');
 const semver = require('./semver');
 
 const LATEST_TTL_MS = 30 * 60 * 1000;
 const SEVERITY_ORDER = ['critical', 'high', 'moderate', 'low', 'info'];
+const FIELD_PRIORITY = ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies'];
 
 function severityRank(severity) {
   const index = SEVERITY_ORDER.indexOf(severity);
@@ -14,6 +15,25 @@ function worstSeverity(advisories) {
     (worst, advisory) => (worst === null || severityRank(advisory.severity) < severityRank(worst) ? advisory.severity : worst),
     null
   );
+}
+
+function isLocal(dep) {
+  return dep.internal || semver.isLocalRange(dep.range);
+}
+
+function summarize(dependencies) {
+  return {
+    total: dependencies.length,
+    outdated: dependencies.filter((dep) => dep.update).length,
+    major: dependencies.filter((dep) => dep.update === 'major').length,
+    vulnerable: dependencies.filter((dep) => dep.advisories.length).length,
+    deprecated: dependencies.filter((dep) => dep.deprecated).length,
+    missing: dependencies.filter((dep) => dep.missing).length
+  };
+}
+
+function fromAdvisory(advisory) {
+  return { ...advisory, vulnerable_versions: advisory.vulnerableVersions };
 }
 
 function toAdvisory(raw) {
@@ -42,7 +62,7 @@ class ProjectService {
   }
 
   hasProjects() {
-    return getWorkspaceFolders().some((folder) => readProject(folder));
+    return readWorkspaces().length > 0;
   }
 
   scan(onProgress) {
@@ -54,11 +74,12 @@ class ProjectService {
   }
 
   async _scan(onProgress) {
-    const projects = getWorkspaceFolders().map(readProject).filter(Boolean);
+    const workspaces = readWorkspaces();
+    const projects = workspaces.flatMap((workspace) => workspace.packages);
     const remote = new Map();
     for (const project of projects) {
       for (const dep of project.dependencies) {
-        if (!semver.isLocalRange(dep.range)) remote.set(dep.name, null);
+        if (!isLocal(dep)) remote.set(dep.name, null);
       }
     }
 
@@ -79,15 +100,58 @@ class ProjectService {
 
     return {
       auditAvailable: advisories !== null,
-      projects: projects.map((project) => this._enrich(project, remote, advisories || {}))
+      workspaces: workspaces.map((workspace) => {
+        const packages = workspace.packages.map((project) => this._enrich(project, remote, advisories || {}));
+        return {
+          root: workspace.root,
+          name: workspace.name,
+          folderName: workspace.folderName,
+          manager: workspace.manager,
+          isMonorepo: workspace.isMonorepo,
+          tool: workspace.tool,
+          packages,
+          overview: workspace.isMonorepo ? this._overview(packages) : null
+        };
+      })
     };
+  }
+
+  _overview(packages) {
+    const byName = new Map();
+    for (const project of packages) {
+      for (const dep of project.dependencies) {
+        if (dep.internal) continue;
+        const usage = { package: project.folderName, folder: project.folder, range: dep.range, current: dep.current, field: dep.field };
+        const existing = byName.get(dep.name);
+        if (!existing) {
+          byName.set(dep.name, { ...dep, usages: [usage] });
+          continue;
+        }
+        existing.usages.push(usage);
+        if (FIELD_PRIORITY.indexOf(dep.field) < FIELD_PRIORITY.indexOf(existing.field)) existing.field = dep.field;
+        if (semver.compare(dep.current, existing.current) < 0) {
+          existing.current = dep.current;
+          existing.update = dep.update;
+        }
+        existing.missing = existing.missing || dep.missing;
+        const known = new Set(existing.advisories.map((advisory) => advisory.id));
+        existing.advisories = sortAdvisories([...existing.advisories, ...dep.advisories.filter((advisory) => !known.has(advisory.id))].map(fromAdvisory));
+        existing.severity = worstSeverity(existing.advisories);
+      }
+    }
+
+    const dependencies = [...byName.values()].map((dep) => {
+      const ranges = [...new Set(dep.usages.map((usage) => usage.range))];
+      return { ...dep, range: ranges.join(' | '), drift: ranges.length > 1 ? ranges : null };
+    });
+    return { dependencies, summary: { ...summarize(dependencies), drift: dependencies.filter((dep) => dep.drift).length, packages: packages.length } };
   }
 
   _versionsToAudit(projects) {
     const versions = {};
     for (const project of projects) {
       for (const dep of project.dependencies) {
-        if (semver.isLocalRange(dep.range)) continue;
+        if (isLocal(dep)) continue;
         const current = dep.installed || semver.minVersion(dep.range);
         if (!current) continue;
         versions[dep.name] = versions[dep.name] || [];
@@ -116,7 +180,7 @@ class ProjectService {
 
   _enrich(project, remote, advisories) {
     const dependencies = project.dependencies.map((dep) => {
-      const local = semver.isLocalRange(dep.range);
+      const local = isLocal(dep);
       const info = remote.get(dep.name) || {};
       const current = dep.installed || semver.minVersion(dep.range);
       const found = (advisories[dep.name] || []).filter((advisory) => advisory && advisory.severity);
@@ -136,18 +200,7 @@ class ProjectService {
       };
     });
 
-    return {
-      ...project,
-      dependencies,
-      summary: {
-        total: dependencies.length,
-        outdated: dependencies.filter((dep) => dep.update).length,
-        major: dependencies.filter((dep) => dep.update === 'major').length,
-        vulnerable: dependencies.filter((dep) => dep.advisories.length).length,
-        deprecated: dependencies.filter((dep) => dep.deprecated).length,
-        missing: dependencies.filter((dep) => dep.missing).length
-      }
-    };
+    return { ...project, dependencies, summary: summarize(dependencies) };
   }
 }
 

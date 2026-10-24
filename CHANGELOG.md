@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Monorepo support: npm/yarn/bun `workspaces`, `pnpm-workspace.yaml` and `lerna.json` are detected; Project view gets a *Whole monorepo* overview with per-package usage, version drift detection and a workspace package list, plus a per-package drill-down.
+- Update all dependencies in one command (sidebar button or *Update All Dependencies…*): fix vulnerable, safe minor/patch update or everything to latest, via `npm-check-updates` with `--workspaces` in monorepos.
+- Installed versions are also read from a hoisted root `node_modules`; nested `package.json` files are watched.
 - Redesigned sidebar with Discover / Project / Saved views, VS Code codicons instead of emoji, category chips, sorting and a compact list mode.
 - Package cards show weekly downloads, dependents, last publish (stale highlighted), license, keywords and a popularity bar.
 - Search autocomplete with package suggestions and editable recent searches; `/` focuses search; clicking a keyword searches it.

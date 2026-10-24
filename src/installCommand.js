@@ -53,6 +53,14 @@ function buildUpdateCommand({ names, manager, dev }) {
   return INSTALL[pm](names.map((name) => `${name}@latest`).join(' '), Boolean(dev));
 }
 
+function buildBulkUpdateCommand({ names, target, workspaces, manager }) {
+  const args = ['-u'];
+  if (target === 'minor' || target === 'patch') args.push(`--target ${target}`);
+  if (names && names.length) args.push(`--filter "${names.join(',')}"`);
+  if (workspaces) args.push('--workspaces --root');
+  return `npx npm-check-updates@latest ${args.join(' ')} && ${managerOf(manager)} install`;
+}
+
 function buildUninstallCommand({ names, manager }) {
   return UNINSTALL[managerOf(manager)](names.join(' '));
 }
@@ -67,6 +75,7 @@ module.exports = {
   MANAGERS,
   buildCommand,
   buildUpdateCommand,
+  buildBulkUpdateCommand,
   buildUninstallCommand,
   buildAllCommands,
   isScaffold

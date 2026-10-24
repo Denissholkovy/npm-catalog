@@ -267,8 +267,16 @@ class CatalogViewProvider {
         break;
       case 'updateDeps':
         if (Array.isArray(message.names) && message.names.length) {
-          this.actions.update(message.folder, message.names.filter((item) => typeof item === 'string'), message.dev === true);
+          this.actions.update(
+            message.folder,
+            message.names.filter((item) => typeof item === 'string'),
+            message.dev === true,
+            message.scope === 'workspace' ? 'workspace' : 'package'
+          );
         }
+        break;
+      case 'updateAll':
+        this.updateAll(message.folder, message.scope);
         break;
       case 'uninstall':
         if (name) this.actions.uninstall(message.folder, name);
@@ -324,8 +332,27 @@ class CatalogViewProvider {
     return this._projectPackage(name);
   }
 
+  async ensureProject() {
+    if (this.project.status !== 'ready') await this.loadProject();
+    return this.project.data;
+  }
+
+  updateAll(folder, scope) {
+    const workspaces = (this.project.data && this.project.data.workspaces) || [];
+    const workspace = workspaces.find((item) => item.root === folder || item.packages.some((pkg) => pkg.folder === folder));
+    if (!workspace) return;
+    const source = scope === 'workspace' && workspace.overview ? workspace.overview : workspace.packages.find((pkg) => pkg.folder === folder);
+    if (!source) return;
+    const deps = source.dependencies.filter((dep) => !dep.local);
+    this.actions.updateAll(folder, scope === 'workspace' ? 'workspace' : 'package', {
+      outdated: deps.filter((dep) => dep.update).length,
+      major: deps.filter((dep) => dep.update === 'major').length,
+      vulnerable: deps.filter((dep) => dep.advisories.length && dep.update).map((dep) => dep.name)
+    });
+  }
+
   _projectPackage(name) {
-    const projects = (this.project.data && this.project.data.projects) || [];
+    const projects = ((this.project.data && this.project.data.workspaces) || []).flatMap((workspace) => workspace.packages);
     for (const project of projects) {
       const dep = project.dependencies.find((item) => item.name === name);
       if (dep) {

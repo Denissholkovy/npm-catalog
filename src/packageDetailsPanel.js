@@ -386,14 +386,18 @@ ${body}
     return `<div class="card project">
       <div class="card-title">In your project</div>
       <dl class="facts">
-        <dt>Folder</dt><dd>${escapeText(info.folder)}</dd>
+        ${
+          info.packages && info.packages.length > 1
+            ? `<dt>Used in</dt><dd>${info.packages.map((item) => escapeText(item)).join('<br>')}</dd>`
+            : `<dt>Folder</dt><dd>${escapeText(info.folder)}</dd>`
+        }
         <dt>Section</dt><dd>${escapeText(info.field)}</dd>
         <dt>Range</dt><dd><code>${escapeText(info.range)}</code></dd>
         <dt>Installed</dt><dd>${info.version ? `<code>${escapeText(info.version)}</code>` : '<span class="dim">not in node_modules</span>'}</dd>
       </dl>
       ${status}
       <div class="actions">
-        ${update ? `<button class="btn primary grow" data-command="update" data-dev="${info.field === 'devDependencies'}">${icon('arrow-up')}Update to latest</button>` : ''}
+        ${update ? `<button class="btn primary grow" data-command="update" data-dev="${info.field === 'devDependencies'}">${icon('arrow-up')}${info.monorepo && info.packages && info.packages.length > 1 ? 'Update everywhere' : 'Update to latest'}</button>` : ''}
         <button class="btn grow" data-command="uninstall">${icon('trash')}Uninstall</button>
       </div>
     </div>`;

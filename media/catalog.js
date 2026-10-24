@@ -10,6 +10,7 @@
     showAllCategories: Boolean(saved.showAllCategories),
     projectFilter: saved.projectFilter || 'all',
     projectFolder: saved.projectFolder || null,
+    showPackages: saved.showPackages !== false,
     projectQuery: ''
   };
   const data = {
@@ -362,9 +363,100 @@
       ${categoryBodyHtml(data.searchKey)}`;
   }
 
-  function selectedProject() {
-    const projects = (project.data && project.data.projects) || [];
-    return projects.find((item) => item.folder === ui.projectFolder) || projects[0] || null;
+  function workspaceList() {
+    return (project.data && project.data.workspaces) || [];
+  }
+
+  function overviewView(workspace) {
+    const root = workspace.packages.find((pkg) => pkg.isRoot) || workspace.packages[0];
+    return {
+      overview: true,
+      workspace,
+      scope: 'workspace',
+      folder: workspace.root,
+      name: workspace.name,
+      version: root ? root.version : null,
+      manager: workspace.manager,
+      dependencies: workspace.overview.dependencies,
+      summary: workspace.overview.summary
+    };
+  }
+
+  function packageView(workspace, pkg) {
+    return { ...pkg, overview: false, workspace, scope: 'package' };
+  }
+
+  function selectedView() {
+    const workspaces = workspaceList();
+    for (const workspace of workspaces) {
+      if (workspace.overview && ui.projectFolder === `ws:${workspace.root}`) return overviewView(workspace);
+      const pkg = workspace.packages.find((item) => item.folder === ui.projectFolder);
+      if (pkg) return packageView(workspace, pkg);
+    }
+    const first = workspaces[0];
+    if (!first) return null;
+    return first.overview ? overviewView(first) : packageView(first, first.packages[0]);
+  }
+
+  function badgeCounts(summary) {
+    const parts = [];
+    if (summary.vulnerable) parts.push(`${summary.vulnerable} vulnerable`);
+    if (summary.outdated) parts.push(`${summary.outdated} outdated`);
+    return parts.length ? ` · ${parts.join(', ')}` : '';
+  }
+
+  function projectPickerHtml(current) {
+    const workspaces = workspaceList();
+    const total = workspaces.reduce((sum, workspace) => sum + workspace.packages.length, 0);
+    if (total < 2) return '';
+    const value = current.overview ? `ws:${current.folder}` : current.folder;
+    const groups = workspaces
+      .map((workspace) => {
+        const options = [];
+        if (workspace.overview) {
+          options.push(
+            `<option value="ws:${esc(workspace.root)}">Whole monorepo · ${workspace.packages.length} packages${esc(badgeCounts(workspace.overview.summary))}</option>`
+          );
+        }
+        for (const pkg of workspace.packages) {
+          options.push(`<option value="${esc(pkg.folder)}">${esc(pkg.folderName)}${pkg.name !== pkg.folderName ? ` — ${esc(pkg.name)}` : ''}${esc(badgeCounts(pkg.summary))}</option>`);
+        }
+        return workspaces.length > 1 ? `<optgroup label="${esc(workspace.folderName)}">${options.join('')}</optgroup>` : options.join('');
+      })
+      .join('');
+    return `<label class="select wide">${icon(current.overview ? 'repo' : 'folder')}<select data-act="project-folder" aria-label="Project">${groups.replace(
+      `value="${esc(value)}"`,
+      `value="${esc(value)}" selected`
+    )}</select></label>`;
+  }
+
+  function packagesListHtml(current) {
+    if (!current.overview) return '';
+    const members = current.workspace.packages;
+    const open = ui.showPackages !== false;
+    const rows = members
+      .map((pkg) => {
+        const chips = [];
+        if (pkg.summary.vulnerable) chips.push(`<span class="chip sev-high" title="Vulnerable dependencies">${icon('shield')}${pkg.summary.vulnerable}</span>`);
+        if (pkg.summary.outdated) chips.push(`<span class="chip warn" title="Outdated dependencies">${icon('arrow-up')}${pkg.summary.outdated}</span>`);
+        if (!chips.length) chips.push(`<span class="chip ok" title="Everything up to date">${icon('check')}</span>`);
+        return `<div class="ws-pkg" tabindex="0" data-act="select-package" data-folder="${esc(pkg.folder)}" title="${esc(pkg.folder)}">
+          ${icon(pkg.isRoot ? 'root-folder' : 'package')}
+          <div class="ws-pkg-main">
+            <div class="ws-pkg-name">${esc(pkg.folderName)}</div>
+            ${pkg.name !== pkg.folderName ? `<div class="ws-pkg-sub">${esc(pkg.name)}${pkg.version ? ` · ${esc(pkg.version)}` : ''}</div>` : ''}
+          </div>
+          <span class="muted small">${pkg.dependencies.length}</span>
+          <div class="ws-pkg-chips">${chips.join('')}</div>
+        </div>`;
+      })
+      .join('');
+    return `<section class="dep-section">
+      <button class="dep-section-head toggle-head" data-act="toggle-packages" aria-expanded="${open}">
+        ${icon(open ? 'chevron-down' : 'chevron-right')}<span>Workspace packages</span><span class="count">${members.length}</span>
+      </button>
+      ${open ? `<div class="ws-list">${rows}</div>` : ''}
+    </section>`;
   }
 
   function projectHtml() {
@@ -394,20 +486,23 @@
         <button class="btn" data-act="project-refresh">Retry</button></div>`;
     }
 
-    const current = selectedProject();
+    const current = selectedView();
     if (!current) return emptyHtml('package', 'No package.json', '');
-    const projects = project.data.projects;
     const summary = current.summary;
-    const folderPicker =
-      projects.length > 1
-        ? `<label class="select wide">${icon('folder')}<select data-act="project-folder" aria-label="Project">${projects
-            .map((item) => `<option value="${esc(item.folder)}"${item === current ? ' selected' : ''}>${esc(item.folderName)}</option>`)
-            .join('')}</select></label>`
-        : '';
+    const workspace = current.workspace;
     const loadingNote = project.status === 'loading' ? `<span class="muted small">${icon('loading', 'codicon-modifier-spin')}Updating…</span>` : '';
+    const subtitle = current.overview
+      ? `monorepo · ${esc(workspace.tool)} · ${esc(current.manager)}`
+      : workspace.isMonorepo
+      ? `${esc(current.folderName)} · ${esc(current.manager)}`
+      : esc(current.manager);
+    const back =
+      !current.overview && workspace.overview
+        ? `<button class="btn link back-link" data-act="select-package" data-folder="ws:${esc(workspace.root)}">${icon('arrow-left')}Whole monorepo</button>`
+        : '';
 
     const tiles = [
-      ['all', summary.total, 'Packages', ''],
+      ['all', summary.total, 'All deps', ''],
       ['outdated', summary.outdated, 'Outdated', summary.outdated ? 'warn' : 'ok'],
       ['vulnerable', summary.vulnerable, 'Vulnerable', summary.vulnerable ? 'bad' : 'ok'],
       ['deprecated', summary.deprecated, 'Deprecated', summary.deprecated ? 'bad' : 'ok']
@@ -420,25 +515,39 @@
       )
       .join('');
 
+    const updatable = current.dependencies.filter((dep) => dep.update && !dep.local).length;
+    const updateAll = updatable
+      ? `<button class="btn primary update-all" data-act="update-all" data-folder="${esc(current.folder)}" data-scope="${current.scope}">
+          ${icon('arrow-up')}Update all${current.overview ? ' packages' : ''}… <span class="update-all-count">${updatable}</span>
+        </button>`
+      : `<div class="all-good">${icon('pass')}Everything is up to date</div>`;
+
     const auditNote = project.data.auditAvailable
       ? ''
       : `<div class="notice">${icon('info')}<div class="notice-body"><span>Security audit is unavailable right now.</span></div></div>`;
     const missingNote = summary.missing
       ? `<div class="notice">${icon('warning')}<div class="notice-body"><span>${summary.missing} package${summary.missing === 1 ? ' is' : 's are'} not installed in node_modules.</span></div></div>`
       : '';
+    const driftNote =
+      current.overview && summary.drift
+        ? `<button class="notice notice-button${ui.projectFilter === 'drift' ? ' active' : ''}" data-act="project-filter" data-filter="drift">${icon('git-compare')}<div class="notice-body"><span><b>${summary.drift}</b> ${summary.drift === 1 ? 'dependency uses' : 'dependencies use'} different versions across packages</span></div></button>`
+        : '';
 
-    return `<div class="project-head">
+    return `${back}
+      <div class="project-head">
         <div class="project-title">
           <b>${esc(current.name)}</b>${current.version ? `<span class="ver">${esc(current.version)}</span>` : ''}
-          <span class="muted small">${esc(current.manager)}</span>
+          <span class="muted small">${subtitle}</span>
           ${loadingNote}
         </div>
         <button class="btn icon" data-act="open-manifest" data-folder="${esc(current.folder)}" title="Open package.json">${icon('go-to-file')}</button>
         <button class="btn icon" data-act="project-refresh" title="Check again">${icon('refresh')}</button>
       </div>
-      ${folderPicker}
+      ${projectPickerHtml(current)}
       <div class="tiles">${tiles}</div>
-      ${auditNote}${missingNote}
+      ${updateAll}
+      ${auditNote}${missingNote}${driftNote}
+      ${packagesListHtml(current)}
       <div class="filter-row">
         <div class="mini-search">${icon('filter')}<input id="projectQuery" type="text" placeholder="Filter dependencies" value="${esc(ui.projectQuery)}" spellcheck="false" aria-label="Filter dependencies"></div>
       </div>
@@ -450,6 +559,7 @@
     if (ui.projectFilter === 'outdated') return Boolean(dep.update);
     if (ui.projectFilter === 'vulnerable') return dep.advisories.length > 0;
     if (ui.projectFilter === 'deprecated') return Boolean(dep.deprecated);
+    if (ui.projectFilter === 'drift') return Boolean(dep.drift);
     return true;
   }
 
@@ -471,7 +581,7 @@
         const outdated = deps.filter((dep) => dep.update && !dep.local).map((dep) => dep.name);
         const updateAll =
           outdated.length > 1 && field !== 'peerDependencies'
-            ? `<button class="btn small" data-act="update-many" data-folder="${esc(current.folder)}" data-names="${esc(outdated.join(' '))}" data-dev="${field === 'devDependencies'}" title="${esc(outdated.join(', '))}">${icon('arrow-up')}Update ${outdated.length}</button>`
+            ? `<button class="btn small" data-act="update-many" data-folder="${esc(current.folder)}" data-scope="${current.scope}" data-names="${esc(outdated.join(' '))}" data-dev="${field === 'devDependencies'}" title="${esc(outdated.join(', '))}">${icon('arrow-up')}Update ${outdated.length}</button>`
             : '';
         return `<section class="dep-section">
           <div class="dep-section-head"><span>${FIELD_LABELS[field]}</span><span class="count">${deps.length}</span>${updateAll}</div>
@@ -496,6 +606,14 @@
     if (dep.missing) chips.push('<span class="chip muted-chip" title="Not found in node_modules">not installed</span>');
     if (dep.local) chips.push('<span class="chip muted-chip">local</span>');
     if (dep.error) chips.push(`<span class="chip muted-chip" title="${esc(dep.error)}">unknown</span>`);
+    if (current.overview && dep.usages && dep.usages.length > 1) {
+      chips.push(
+        `<span class="chip muted-chip" title="${esc(dep.usages.map((usage) => `${usage.package}: ${usage.range}`).join('\n'))}">${icon('package')}${dep.usages.length} packages</span>`
+      );
+    } else if (current.overview && dep.usages) {
+      chips.push(`<span class="chip muted-chip" title="Used in ${esc(dep.usages[0].package)}">${esc(dep.usages[0].package)}</span>`);
+    }
+    if (dep.drift) chips.push(`<span class="chip warn" title="${esc(dep.drift.join('\n'))}">${icon('git-compare')}${dep.drift.length} versions</span>`);
 
     const version = dep.local
       ? `<span class="muted">${esc(dep.range)}</span>`
@@ -505,8 +623,13 @@
 
     const update =
       dep.update && dep.field !== 'peerDependencies'
-        ? `<button class="btn small" data-act="update-one" data-folder="${esc(current.folder)}" data-name="${esc(dep.name)}" data-dev="${dep.field === 'devDependencies'}" title="Install ${esc(dep.name)}@latest">${icon('arrow-up')}Update</button>`
+        ? `<button class="btn small" data-act="update-one" data-folder="${esc(current.folder)}" data-scope="${current.scope}" data-name="${esc(dep.name)}" data-dev="${dep.field === 'devDependencies'}" title="${
+            current.overview ? `Update ${esc(dep.name)} to ${esc(dep.latest)} in every package that uses it` : `Install ${esc(dep.name)}@latest`
+          }">${icon('arrow-up')}Update</button>`
         : '';
+    const uninstall = current.overview
+      ? ''
+      : `<button class="btn icon" data-act="uninstall" data-folder="${esc(current.folder)}" data-name="${esc(dep.name)}" title="Uninstall">${icon('trash')}</button>`;
 
     return `<div class="dep" tabindex="0" data-act="open-dep" data-name="${esc(dep.name)}" title="${esc(dep.description || dep.name)}">
       <div class="dep-main">
@@ -516,7 +639,7 @@
       </div>
       <div class="dep-actions">
         ${update}
-        <button class="btn icon" data-act="uninstall" data-folder="${esc(current.folder)}" data-name="${esc(dep.name)}" title="Uninstall">${icon('trash')}</button>
+        ${uninstall}
       </div>
     </div>`;
   }
@@ -553,7 +676,7 @@
   }
 
   function viewsHtml() {
-    const summary = (selectedProject() || {}).summary;
+    const summary = (selectedView() || {}).summary;
     let projectBadge = '';
     if (summary && summary.vulnerable) projectBadge = `<span class="badge bad" title="Vulnerable packages">${summary.vulnerable}</span>`;
     else if (summary && summary.outdated) projectBadge = `<span class="badge warn" title="Outdated packages">${summary.outdated}</span>`;
@@ -709,10 +832,25 @@
         post({ type: 'initProject' });
         break;
       case 'update-one':
-        post({ type: 'updateDeps', folder: target.dataset.folder, names: [target.dataset.name], dev: target.dataset.dev === 'true' });
+        post({ type: 'updateDeps', folder: target.dataset.folder, scope: target.dataset.scope, names: [target.dataset.name], dev: target.dataset.dev === 'true' });
         break;
       case 'update-many':
-        post({ type: 'updateDeps', folder: target.dataset.folder, names: target.dataset.names.split(' '), dev: target.dataset.dev === 'true' });
+        post({ type: 'updateDeps', folder: target.dataset.folder, scope: target.dataset.scope, names: target.dataset.names.split(' '), dev: target.dataset.dev === 'true' });
+        break;
+      case 'update-all':
+        post({ type: 'updateAll', folder: target.dataset.folder, scope: target.dataset.scope });
+        break;
+      case 'select-package':
+        ui.projectFolder = target.dataset.folder;
+        if (ui.projectFilter === 'drift' && !ui.projectFolder.startsWith('ws:')) ui.projectFilter = 'all';
+        persist();
+        scrollTop();
+        render();
+        break;
+      case 'toggle-packages':
+        ui.showPackages = ui.showPackages === false;
+        persist();
+        render();
         break;
       case 'uninstall':
         post({ type: 'uninstall', folder: target.dataset.folder, name: target.dataset.name });
@@ -750,7 +888,10 @@
     const select = event.target.closest('select[data-act]');
     if (!select) return;
     if (select.dataset.act === 'sort') ui.sort = select.value;
-    if (select.dataset.act === 'project-folder') ui.projectFolder = select.value;
+    if (select.dataset.act === 'project-folder') {
+      ui.projectFolder = select.value;
+      if (ui.projectFilter === 'drift' && !select.value.startsWith('ws:')) ui.projectFilter = 'all';
+    }
     persist();
     render();
   });
@@ -758,7 +899,7 @@
   list.addEventListener('input', (event) => {
     if (event.target.id !== 'projectQuery') return;
     ui.projectQuery = event.target.value;
-    const current = selectedProject();
+    const current = selectedView();
     const rows = document.getElementById('projectRows');
     if (current && rows) rows.innerHTML = projectRowsHtml(current);
   });
@@ -767,10 +908,11 @@
     if (event.key !== 'Enter' && event.key !== ' ') return;
     if (event.target.tagName === 'BUTTON' || event.target.tagName === 'INPUT' || event.target.tagName === 'SELECT') return;
     const card = event.target.closest('.pkg');
-    const row = event.target.closest('.dep, .recent');
+    const row = event.target.closest('.dep, .recent, .ws-pkg');
     if (!card && !row) return;
     event.preventDefault();
     if (card) openCard(card);
+    else if (row.classList.contains('ws-pkg')) handleAction(row);
     else post({ type: 'openPackage', name: row.dataset.name });
   });
 

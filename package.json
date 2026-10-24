@@ -22,7 +22,9 @@
     "outdated",
     "security",
     "audit",
-    "bundle size"
+    "bundle size",
+    "monorepo",
+    "workspaces"
   ],
   "engines": {
     "vscode": "^1.85.0"
@@ -67,6 +69,12 @@
         "command": "npmCatalog.showProjectDependencies",
         "title": "Check Project Dependencies",
         "icon": "$(package)",
+        "category": "NPM Catalog"
+      },
+      {
+        "command": "npmCatalog.updateAllDependencies",
+        "title": "Update All Dependencies…",
+        "icon": "$(arrow-up)",
         "category": "NPM Catalog"
       },
       {
@@ -118,6 +126,11 @@
           "command": "npmCatalog.clearSearchHistory",
           "when": "view == npmCatalogView",
           "group": "more@2"
+        },
+        {
+          "command": "npmCatalog.updateAllDependencies",
+          "when": "view == npmCatalogView",
+          "group": "more@0"
         }
       ]
     },

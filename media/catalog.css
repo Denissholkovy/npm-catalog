@@ -292,7 +292,7 @@ kbd {
   border: 1px solid var(--vscode-dropdown-border, var(--border));
   background: var(--vscode-dropdown-background);
 }
-.select.wide select { flex: 1; }
+.select.wide select { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .search-banner {
   display: flex;
@@ -558,6 +558,42 @@ kbd {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .view span:not(.codicon):not(.badge) { display: none; }
 }
+
+.update-all { width: 100%; height: 30px; margin-bottom: 10px; font-weight: 600; }
+.update-all-count {
+  min-width: 18px;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 16px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-button-foreground) 22%, transparent);
+}
+.all-good { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 12px; color: var(--ok); }
+
+.notice-button { width: 100%; text-align: left; cursor: pointer; border-left-color: var(--warn); }
+.notice-button > .codicon { color: var(--warn); }
+.notice-button:hover, .notice-button.active { background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.notice-button .notice-body span { color: var(--vscode-foreground); }
+
+.back-link { margin: -4px 0 6px -4px; }
+
+.toggle-head { width: 100%; text-align: left; }
+.toggle-head:hover { color: var(--vscode-foreground); }
+.ws-list { border: 1px solid var(--border-soft); border-radius: 6px; overflow: hidden; }
+.ws-pkg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.ws-pkg + .ws-pkg { border-top: 1px solid var(--border-soft); }
+.ws-pkg:hover { background: var(--surface-hover); }
+.ws-pkg > .codicon { color: var(--muted); }
+.ws-pkg-main { flex: 1; min-width: 0; }
+.ws-pkg-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-pkg-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-pkg-chips { display: flex; gap: 3px; flex: none; }
 
 .filter-row { margin-bottom: 8px; }
 .mini-search { position: relative; display: flex; align-items: center; }
