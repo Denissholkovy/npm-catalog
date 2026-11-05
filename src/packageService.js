@@ -4,6 +4,7 @@ const { MarkdownRenderer } = require('./markdownRenderer');
 const { getPageSize, getCacheTtlMs } = require('./settings');
 const { sortAdvisories } = require('./projectService');
 const semver = require('./semver');
+const { normalizeRepoUrl, parseGithubRepo } = require('./repoUrl');
 
 const DETAILS_TTL_MS = 10 * 60 * 1000;
 const SUGGEST_TTL_MS = 5 * 60 * 1000;
@@ -219,13 +220,13 @@ class PackageService {
       details.keywords = (versionInfo.keywords || meta.keywords || []).filter((k) => typeof k === 'string').slice(0, MAX_KEYWORDS);
 
       repo = versionInfo.repository || meta.repository;
-      details.repositoryUrl = this._normalizeRepoUrl(repo);
+      details.repositoryUrl = normalizeRepoUrl(repo);
     } catch (err) {
       details.error = err.status === 404 ? 'Package not found in the npm registry' : err.message;
       return details;
     }
 
-    const githubRepo = this._parseGithubRepo(repo);
+    const githubRepo = parseGithubRepo(repo);
     const typesName = this._typesPackageName(name);
     const [range, ghData, advisories, typesExists] = await Promise.all([
       this.client.getDownloadsRange(name),
@@ -322,34 +323,6 @@ class PackageService {
     if (!license) return null;
     if (typeof license === 'string') return license;
     return license.type || null;
-  }
-
-  _repoUrlOf(repo) {
-    if (!repo) return null;
-    const url = typeof repo === 'string' ? repo : repo.url;
-    return url ? String(url).trim() : null;
-  }
-
-  _normalizeRepoUrl(repo) {
-    const url = this._repoUrlOf(repo);
-    if (!url) return null;
-
-    if (/^github:/.test(url)) return `https://github.com/${url.slice('github:'.length)}`;
-    if (/^[\w.-]+\/[\w.-]+$/.test(url)) return `https://github.com/${url}`;
-
-    return url
-      .replace(/^git\+/, '')
-      .replace(/^git@([^:]+):/, 'https://$1/')
-      .replace(/^(?:git|ssh):\/\/(?:git@)?/, 'https://')
-      .replace(/\.git$/, '');
-  }
-
-  _parseGithubRepo(repo) {
-    const normalized = this._normalizeRepoUrl(repo);
-    if (!normalized) return null;
-    const match = normalized.match(/^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/#?]+)/);
-    if (!match) return null;
-    return { owner: match[1], repo: match[2] };
   }
 }
 

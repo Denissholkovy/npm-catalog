@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+Dependency updates are now the heart of the extension.
+
+- Updates are now the main view: a summary card with a major/minor/patch bar, one-click *Safe update*, *All to latest* (confirms major versions) and *Fix vulnerable*.
+- Dependencies grouped by risk (Security, Deprecated, Major, Minor, Patch, Up to date) with per-group update, checkboxes and *Update selected*, release-notes links for major updates.
+- Dependencies are checked on startup; the update count appears on the activity bar icon and in the status bar (`npmCatalog.checkOnStartup`, `npmCatalog.showStatusBar`).
+- One visual style across Updates and Explore; cleaner rows with fewer badges; better layout in narrow and wide sidebars.
+- Catalog, search and saved packages moved to the secondary *Explore* tab. Explore is now a list: Saved and every group with its categories; a category opens its own page with a back button. Package cards keep the popularity bar.
+
+## 0.1.1 – 0.1.7
 
 - Monorepo support: npm/yarn/bun `workspaces`, `pnpm-workspace.yaml` and `lerna.json` are detected; Project view gets a *Whole monorepo* overview with per-package usage, version drift detection and a workspace package list, plus a per-package drill-down.
 - Update all dependencies in one command (sidebar button or *Update All Dependencies…*): fix vulnerable, safe minor/patch update or everything to latest, via `npm-check-updates` with `--workspaces` in monorepos.
@@ -13,7 +23,6 @@
 - New details panel: two-column layout, npm/yarn/pnpm/bun switcher, one-year download chart with trend, bundle size, TypeScript and module format badges, security advisories, GitHub stats, Versions and Dependencies tabs, navigation between packages with Back.
 - New commands: Open Package by Name…, Check Project Dependencies.
 - Recently viewed packages.
-
 - Fixed: expanding a cached category no longer silently loads another page.
 - Fixed: package details are HTML-escaped and rendered under a strict CSP; README is rendered by a safe Markdown renderer (lists, tables, quotes, images, badges).
 - Cache is now in-memory with a TTL (`npmCatalog.cacheTtlHours`) and persisted via globalState.

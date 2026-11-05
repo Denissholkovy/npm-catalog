@@ -43,6 +43,9 @@ class CatalogViewProvider {
     this.searchTerm = null;
     this.suggestions = [];
     this.project = { status: 'idle', data: null, progress: null, error: null };
+    this._onDidChangeSummary = new vscode.EventEmitter();
+    this.onDidChangeSummary = this._onDidChangeSummary.event;
+    this.summary = null;
     this._loadCategoryTree();
   }
 
@@ -84,6 +87,7 @@ class CatalogViewProvider {
       this.view = null;
     });
     this._updateDescription();
+    this._applyBadge();
   }
 
   _html(webview, mediaRoot) {
@@ -218,6 +222,29 @@ class CatalogViewProvider {
       this.project = { ...this.project, status: 'error', error: err.message };
     }
     this._sendProject();
+    this._updateSummary();
+  }
+
+  _updateSummary() {
+    const workspaces = (this.project.data && this.project.data.workspaces) || [];
+    const deps = workspaces.flatMap((workspace) =>
+      workspace.overview ? workspace.overview.dependencies : workspace.packages.flatMap((pkg) => pkg.dependencies)
+    );
+    this.summary = {
+      outdated: deps.filter((dep) => dep.update).length,
+      major: deps.filter((dep) => dep.update === 'major').length,
+      vulnerable: deps.filter((dep) => dep.advisories.length).length,
+      deprecated: deps.filter((dep) => dep.deprecated).length
+    };
+    this._applyBadge();
+    this._onDidChangeSummary.fire(this.summary);
+  }
+
+  _applyBadge() {
+    if (!this.view || !this.summary) return;
+    const { outdated, vulnerable } = this.summary;
+    const tooltip = [vulnerable && `${vulnerable} vulnerable`, outdated && `${outdated} updates available`].filter(Boolean).join(' · ');
+    this.view.badge = outdated || vulnerable ? { value: outdated || vulnerable, tooltip } : undefined;
   }
 
   _sendProject() {
@@ -276,7 +303,7 @@ class CatalogViewProvider {
         }
         break;
       case 'updateAll':
-        this.updateAll(message.folder, message.scope);
+        this.updateAll(message.folder, message.scope, message.mode);
         break;
       case 'uninstall':
         if (name) this.actions.uninstall(message.folder, name);
@@ -337,18 +364,26 @@ class CatalogViewProvider {
     return this.project.data;
   }
 
-  updateAll(folder, scope) {
+  updateAll(folder, scope, mode) {
     const workspaces = (this.project.data && this.project.data.workspaces) || [];
     const workspace = workspaces.find((item) => item.root === folder || item.packages.some((pkg) => pkg.folder === folder));
     if (!workspace) return;
     const source = scope === 'workspace' && workspace.overview ? workspace.overview : workspace.packages.find((pkg) => pkg.folder === folder);
     if (!source) return;
     const deps = source.dependencies.filter((dep) => !dep.local);
-    this.actions.updateAll(folder, scope === 'workspace' ? 'workspace' : 'package', {
+    const stats = {
       outdated: deps.filter((dep) => dep.update).length,
       major: deps.filter((dep) => dep.update === 'major').length,
       vulnerable: deps.filter((dep) => dep.advisories.length && dep.update).map((dep) => dep.name)
-    });
+    };
+    const normalizedScope = scope === 'workspace' ? 'workspace' : 'package';
+    if (!['safe', 'latest', 'vulnerable'].includes(mode)) {
+      this.actions.updateAll(folder, normalizedScope, stats);
+      return;
+    }
+    Promise.resolve(this.actions.runUpdate(folder, normalizedScope, mode, stats)).then((running) =>
+      this._post({ type: 'updateStatus', running: Boolean(running) })
+    );
   }
 
   _projectPackage(name) {

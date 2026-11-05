@@ -2,13 +2,13 @@
   const vscode = acquireVsCodeApi();
   const saved = vscode.getState() || {};
   const ui = {
-    tab: saved.tab || 'discover',
-    group: saved.group || null,
-    categoryByGroup: saved.categoryByGroup || {},
+    tab: saved.tab === 'discover' || saved.tab === 'saved' || saved.tab === 'explore' ? 'explore' : 'updates',
+    page: saved.tab === 'saved' ? '__saved__' : saved.page || null,
+    openGroups: Array.isArray(saved.openGroups) ? saved.openGroups : [],
     sort: saved.sort || 'relevance',
     density: saved.density || 'cards',
-    showAllCategories: Boolean(saved.showAllCategories),
-    projectFilter: saved.projectFilter || 'all',
+    projectFilter: ['security', 'deprecated', 'major', 'minor', 'patch', 'drift'].includes(saved.projectFilter) ? saved.projectFilter : 'all',
+    showCurrent: Boolean(saved.showCurrent),
     projectFolder: saved.projectFolder || null,
     showPackages: saved.showPackages !== false,
     projectQuery: ''
@@ -27,9 +27,13 @@
   const states = new Map();
   const project = { status: 'idle', data: null, progress: null, error: null };
   const suggest = { open: false, items: [], index: -1, seq: 0, term: '', loading: false };
+  const selection = new Set();
+  let selectionKey = null;
+  let pendingUpdate = false;
+  let pendingTimer = null;
 
-  const CATEGORY_PREVIEW = 8;
   const SUGGEST_DELAY_MS = 220;
+  const PENDING_TIMEOUT_MS = 3 * 60 * 1000;
   const TILE_COLORS = ['blue', 'green', 'orange', 'purple', 'red', 'yellow'];
   const SORTS = [
     ['relevance', 'Popular'],
@@ -37,18 +41,16 @@
     ['updated', 'Recently updated'],
     ['name', 'Name A–Z']
   ];
-  const PROJECT_FILTERS = [
-    ['all', 'All'],
-    ['outdated', 'Outdated'],
-    ['vulnerable', 'Security'],
-    ['deprecated', 'Deprecated']
+  const SAVED_GROUP = '__saved__';
+  const UPDATE_GROUPS = [
+    { key: 'security', label: 'Security', icon: 'shield', hint: '', match: (dep) => dep.advisories.length > 0 },
+    { key: 'deprecated', label: 'Deprecated', icon: 'warning', hint: '', match: (dep) => Boolean(dep.deprecated) },
+    { key: 'major', label: 'Major', icon: 'flame', hint: 'May contain breaking changes', match: (dep) => dep.update === 'major' },
+    { key: 'minor', label: 'Minor', icon: 'sparkle', hint: '', match: (dep) => dep.update === 'minor' },
+    { key: 'patch', label: 'Patch', icon: 'debug', hint: '', match: (dep) => dep.update === 'patch' || dep.update === 'prerelease' },
+    { key: 'current', label: 'Up to date', icon: 'pass', hint: '', match: () => true }
   ];
-  const FIELD_LABELS = {
-    dependencies: 'Dependencies',
-    devDependencies: 'Dev dependencies',
-    peerDependencies: 'Peer dependencies',
-    optionalDependencies: 'Optional dependencies'
-  };
+  const FIELD_TAGS = { devDependencies: 'dev', peerDependencies: 'peer', optionalDependencies: 'optional' };
 
   const list = document.getElementById('list');
   const views = document.getElementById('views');
@@ -158,24 +160,24 @@
     return `<span class="chip ok" title="${esc(title)}">${icon('check')}Installed${info.version ? ` ${esc(info.version)}` : ''}</span>`;
   }
 
-  function popularityBar(pkg, max) {
-    if (!max || typeof pkg.weeklyDownloads !== 'number') return '';
-    const width = Math.max(3, Math.round(Math.sqrt(pkg.weeklyDownloads / max) * 100));
-    return `<div class="pop" title="Popularity relative to this list"><span style="width:${width}%"></span></div>`;
-  }
-
   function actionsHtml(pkg) {
     if (isScaffold(pkg)) {
       return `<div class="pkg-actions">
-        <button class="btn primary" data-act="install" title="Run in a terminal">${icon('terminal')}Run</button>
+        <button class="btn soft" data-act="install" title="Run in a terminal">${icon('terminal')}Run</button>
         <button class="btn icon" data-act="copy" title="Copy command">${icon('copy')}</button>
       </div>`;
     }
     return `<div class="pkg-actions">
-      <button class="btn primary" data-act="install" title="Add to dependencies">${icon('add')}Install</button>
+      <button class="btn soft" data-act="install" title="Add to dependencies">${icon('add')}Install</button>
       <button class="btn" data-act="install-dev" title="Add to devDependencies">Dev</button>
       <button class="btn icon" data-act="copy" title="Copy install command">${icon('copy')}</button>
     </div>`;
+  }
+
+  function popularityBar(pkg, max) {
+    if (!max || typeof pkg.weeklyDownloads !== 'number') return '';
+    const width = Math.max(3, Math.round(Math.sqrt(pkg.weeklyDownloads / max) * 100));
+    return `<div class="pop" title="${esc(formatCount(pkg.weeklyDownloads))} weekly downloads — compared with this list"><span style="width:${width}%"></span></div>`;
   }
 
   function cardHtml(pkg, key, max) {
@@ -233,8 +235,8 @@
   }
 
   function cardsHtml(packages, key) {
-    const max = packages.reduce((top, pkg) => Math.max(top, pkg.weeklyDownloads || 0), 0);
-    return packages.map((pkg) => cardHtml(pkg, key, packages.length > 1 ? max : 0)).join('');
+    const max = packages.length > 1 ? packages.reduce((top, pkg) => Math.max(top, pkg.weeklyDownloads || 0), 0) : 0;
+    return packages.map((pkg) => cardHtml(pkg, key, max)).join('');
   }
 
   function categoryBodyHtml(key) {
@@ -297,67 +299,96 @@
     return name.replace(/\s*\(.*?\)\s*/g, '').trim();
   }
 
-  function currentGroup() {
-    return data.groups.find((group) => group.name === ui.group) || data.groups[0] || null;
-  }
-
-  function currentCategoryKey(group) {
-    const savedKey = ui.categoryByGroup[group.name];
-    const valid = group.categories.some((cat) => cat.key === savedKey);
-    return valid ? savedKey : group.categories[0].key;
-  }
-
-  function groupsHtml(activeGroup) {
-    return `<div class="groups" role="tablist" aria-label="Groups">${data.groups
-      .map((group) => {
-        const active = group === activeGroup;
-        return `<button class="group${active ? ' active' : ''}" style="--accent: var(${group.color})" role="tab" aria-selected="${active}" data-act="select-group" data-group="${esc(group.name)}" title="${esc(group.tagline || group.name)}">
-          ${icon(group.icon)}<span>${esc(groupLabel(group.name))}</span>
-        </button>`;
-      })
-      .join('')}</div>`;
-  }
-
-  function categoriesHtml(group, activeKey) {
-    if (group.categories.length < 2) return '';
-    const activeIndex = group.categories.findIndex((cat) => cat.key === activeKey);
-    const collapsed = !ui.showAllCategories && group.categories.length > CATEGORY_PREVIEW + 1;
-    const visible = collapsed
-      ? group.categories.filter((cat, index) => index < CATEGORY_PREVIEW || index === activeIndex)
-      : group.categories;
-    const chips = visible.map((cat) => {
-      const active = cat.key === activeKey;
-      return `<button class="cat${active ? ' active' : ''}" aria-pressed="${active}" data-act="select-category" data-key="${esc(cat.key)}">${esc(cat.name)}</button>`;
-    });
-    if (group.categories.length > CATEGORY_PREVIEW + 1) {
-      chips.push(
-        collapsed
-          ? `<button class="cat more" data-act="toggle-categories">+${group.categories.length - visible.length} more</button>`
-          : '<button class="cat more" data-act="toggle-categories">Show less</button>'
-      );
+  function findCategory(key) {
+    for (const group of data.groups) {
+      const category = group.categories.find((cat) => cat.key === key);
+      if (category) return { group, category };
     }
-    return `<div class="cats" style="--accent: var(${group.color})">${chips.join('')}</div>`;
+    return null;
   }
 
-  function discoverHtml() {
-    if (data.searchTerm) return searchResultsHtml();
-    const group = currentGroup();
-    if (!group) return skeletonHtml();
-    const key = currentCategoryKey(group);
-    return `${groupsHtml(group)}
-      <p class="tagline">${esc(group.tagline || '')}</p>
-      ${categoriesHtml(group, key)}
+  function pageHeadHtml(title, subtitle, extra) {
+    return `<div class="page-head">
+      <button class="btn icon" data-act="go-home" title="Back to Explore" aria-label="Back to Explore">${icon('arrow-left')}</button>
+      <div class="page-title">${subtitle ? `<span>${esc(subtitle)}</span>` : ''}<b>${esc(title)}</b></div>
+      ${extra || ''}
+    </div>`;
+  }
+
+  function navRow({ act, attrs, iconName, color, title, subtitle, count, chevron }) {
+    return `<button class="nav-row" data-act="${act}" ${attrs || ''}${color ? ` style="--accent: var(${color})"` : ''}>
+      ${iconName ? `<span class="nav-icon">${icon(iconName)}</span>` : ''}
+      <span class="nav-text"><span class="nav-title">${esc(title)}</span>${subtitle ? `<span class="nav-sub">${esc(subtitle)}</span>` : ''}</span>
+      ${count ? `<span class="count">${count}</span>` : ''}
+      ${icon(chevron || 'chevron-right', 'nav-chevron')}
+    </button>`;
+  }
+
+  function exploreHomeHtml() {
+    const saved = navRow({
+      act: 'open-page',
+      attrs: 'data-page="__saved__"',
+      iconName: 'star-full',
+      color: '--vscode-charts-yellow',
+      title: 'Saved',
+      subtitle: data.favorites.length ? 'Your starred packages and recent views' : 'Star a package to keep it here',
+      count: data.favorites.length || ''
+    });
+    const groups = data.groups
+      .map((group) => {
+        if (group.categories.length === 1) {
+          return `<div class="nav-group">${navRow({
+            act: 'open-category',
+            attrs: `data-key="${esc(group.categories[0].key)}"`,
+            iconName: group.icon,
+            color: group.color,
+            title: groupLabel(group.name),
+            subtitle: group.tagline
+          })}</div>`;
+        }
+        const open = ui.openGroups.includes(group.name);
+        const items = open
+          ? `<div class="nav-items">${group.categories
+              .map((cat) => `<button class="nav-item" data-act="open-category" data-key="${esc(cat.key)}"><span class="nav-item-label">${esc(cat.name)}</span>${icon('chevron-right', 'nav-chevron')}</button>`)
+              .join('')}</div>`
+          : '';
+        return `<div class="nav-group${open ? ' open' : ''}">${navRow({
+          act: 'toggle-group',
+          attrs: `data-group="${esc(group.name)}" aria-expanded="${open}"`,
+          iconName: group.icon,
+          color: group.color,
+          title: groupLabel(group.name),
+          subtitle: group.tagline,
+          count: group.categories.length,
+          chevron: open ? 'chevron-up' : 'chevron-down'
+        })}${items}</div>`;
+      })
+      .join('');
+    return `<div class="nav-list">${saved}</div>
+      <div class="group-head"><span class="group-title">Browse by category</span></div>
+      <div class="nav-list">${groups}</div>`;
+  }
+
+  function categoryPageHtml(key) {
+    const found = findCategory(key);
+    const isAll = found.category.name === 'All starters';
+    return `${pageHeadHtml(isAll ? groupLabel(found.group.name) : found.category.name, isAll ? null : groupLabel(found.group.name))}
       ${toolbarHtml(key)}
       ${categoryBodyHtml(key)}`;
   }
 
+  function discoverHtml() {
+    if (data.searchTerm) return searchResultsHtml();
+    if (!data.groups.length) return skeletonHtml();
+    if (ui.page === SAVED_GROUP) return `${pageHeadHtml('Saved', null)}${savedHtml()}`;
+    if (ui.page && findCategory(ui.page)) return categoryPageHtml(ui.page);
+    return exploreHomeHtml();
+  }
+
   function searchResultsHtml() {
-    return `<div class="search-banner">
-        <div class="search-banner-text">
-          <span class="muted">Results for</span>
-          <b>${esc(data.searchTerm)}</b>
-        </div>
-        <button class="btn" data-act="clear-search">${icon('arrow-left')}Back to catalog</button>
+    return `<div class="page-head">
+        <button class="btn icon" data-act="clear-search" title="Back to Explore" aria-label="Back to Explore">${icon('arrow-left')}</button>
+        <div class="page-title"><span>Search results</span><b>${esc(data.searchTerm)}</b></div>
       </div>
       ${toolbarHtml(data.searchKey)}
       ${categoryBodyHtml(data.searchKey)}`;
@@ -374,6 +405,7 @@
       workspace,
       scope: 'workspace',
       folder: workspace.root,
+      key: `ws:${workspace.root}`,
       name: workspace.name,
       version: root ? root.version : null,
       manager: workspace.manager,
@@ -383,7 +415,7 @@
   }
 
   function packageView(workspace, pkg) {
-    return { ...pkg, overview: false, workspace, scope: 'package' };
+    return { ...pkg, overview: false, workspace, scope: 'package', key: pkg.folder };
   }
 
   function selectedView() {
@@ -398,6 +430,34 @@
     return first.overview ? overviewView(first) : packageView(first, first.packages[0]);
   }
 
+  function groupOf(dep) {
+    return UPDATE_GROUPS.find((group) => group.match(dep)).key;
+  }
+
+  function isUpdatable(dep) {
+    return Boolean(dep.update) && !dep.local && dep.field !== 'peerDependencies';
+  }
+
+  function countsOf(deps) {
+    const counts = { major: 0, minor: 0, patch: 0, current: 0, vulnerable: 0, fixable: [], deprecated: 0 };
+    for (const dep of deps) {
+      if (dep.local) continue;
+      if (dep.update === 'major') counts.major++;
+      else if (dep.update === 'minor') counts.minor++;
+      else if (dep.update) counts.patch++;
+      else counts.current++;
+      if (dep.advisories.length) {
+        counts.vulnerable++;
+        if (isUpdatable(dep)) counts.fixable.push(dep.name);
+      }
+      if (dep.deprecated) counts.deprecated++;
+    }
+    counts.outdated = counts.major + counts.minor + counts.patch;
+    counts.safe = counts.minor + counts.patch;
+    counts.total = counts.outdated + counts.current;
+    return counts;
+  }
+
   function badgeCounts(summary) {
     const parts = [];
     if (summary.vulnerable) parts.push(`${summary.vulnerable} vulnerable`);
@@ -409,7 +469,6 @@
     const workspaces = workspaceList();
     const total = workspaces.reduce((sum, workspace) => sum + workspace.packages.length, 0);
     if (total < 2) return '';
-    const value = current.overview ? `ws:${current.folder}` : current.folder;
     const groups = workspaces
       .map((workspace) => {
         const options = [];
@@ -425,8 +484,8 @@
       })
       .join('');
     return `<label class="select wide">${icon(current.overview ? 'repo' : 'folder')}<select data-act="project-folder" aria-label="Project">${groups.replace(
-      `value="${esc(value)}"`,
-      `value="${esc(value)}" selected`
+      `value="${esc(current.key)}"`,
+      `value="${esc(current.key)}" selected`
     )}</select></label>`;
   }
 
@@ -437,41 +496,124 @@
     const rows = members
       .map((pkg) => {
         const chips = [];
-        if (pkg.summary.vulnerable) chips.push(`<span class="chip sev-high" title="Vulnerable dependencies">${icon('shield')}${pkg.summary.vulnerable}</span>`);
+        if (pkg.summary.vulnerable) chips.push(`<span class="chip bad" title="Vulnerable dependencies">${icon('shield')}${pkg.summary.vulnerable}</span>`);
         if (pkg.summary.outdated) chips.push(`<span class="chip warn" title="Outdated dependencies">${icon('arrow-up')}${pkg.summary.outdated}</span>`);
         if (!chips.length) chips.push(`<span class="chip ok" title="Everything up to date">${icon('check')}</span>`);
-        return `<div class="ws-pkg" tabindex="0" data-act="select-package" data-folder="${esc(pkg.folder)}" title="${esc(pkg.folder)}">
-          ${icon(pkg.isRoot ? 'root-folder' : 'package')}
+        return `<div class="ws-pkg" tabindex="0" data-act="select-package" data-folder="${esc(pkg.folder)}" title="${esc(pkg.folder)}" style="--accent: var(${pkg.isRoot ? '--vscode-charts-purple' : '--vscode-charts-blue'})">
+          <span class="nav-icon">${icon(pkg.isRoot ? 'root-folder' : 'package')}</span>
           <div class="ws-pkg-main">
             <div class="ws-pkg-name">${esc(pkg.folderName)}</div>
             ${pkg.name !== pkg.folderName ? `<div class="ws-pkg-sub">${esc(pkg.name)}${pkg.version ? ` · ${esc(pkg.version)}` : ''}</div>` : ''}
           </div>
-          <span class="muted small">${pkg.dependencies.length}</span>
           <div class="ws-pkg-chips">${chips.join('')}</div>
+          ${icon('chevron-right', 'nav-chevron')}
         </div>`;
       })
       .join('');
-    return `<section class="dep-section">
-      <button class="dep-section-head toggle-head" data-act="toggle-packages" aria-expanded="${open}">
-        ${icon(open ? 'chevron-down' : 'chevron-right')}<span>Workspace packages</span><span class="count">${members.length}</span>
+    return `<section class="group-block">
+      <button class="group-head toggle-head" data-act="toggle-packages" aria-expanded="${open}">
+        ${icon('package', 'group-icon')}<span class="group-title">Workspace packages</span><span class="count">${members.length}</span>
+        <span class="group-spacer"></span>${icon(open ? 'chevron-up' : 'chevron-down', 'nav-chevron')}
       </button>
       ${open ? `<div class="ws-list">${rows}</div>` : ''}
     </section>`;
   }
 
-  function projectHtml() {
+  function checkedLabel() {
+    const checkedAt = project.data && project.data.checkedAt;
+    const ago = checkedAt ? timeAgo(checkedAt) : null;
+    if (!ago) return '';
+    return ago === 'today' ? `Checked ${new Date(checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : `Checked ${ago}`;
+  }
+
+  function heroHtml(current) {
+    const counts = countsOf(current.dependencies);
+    const segments = [
+      ['major', counts.major],
+      ['minor', counts.minor],
+      ['patch', counts.patch],
+      ['current', counts.current]
+    ].filter(([, value]) => value > 0);
+    const bar = counts.total
+      ? `<div class="health-bar" role="img" aria-label="${counts.outdated} of ${counts.total} dependencies can be updated">${segments
+          .map(([key, value]) => `<span class="seg-${key}" style="flex:${value}" title="${value} ${key === 'current' ? 'up to date' : key}"></span>`)
+          .join('')}</div>`
+      : '';
+    const legend = [
+      ['major', counts.major, 'major'],
+      ['minor', counts.minor, 'minor'],
+      ['patch', counts.patch, 'patch'],
+      ['current', counts.current, 'up to date']
+    ]
+      .filter(([, value]) => value > 0)
+      .map(
+        ([key, value, label]) =>
+          `<button class="legend${ui.projectFilter === key ? ' active' : ''}" data-act="project-filter" data-filter="${key}"><i class="dot seg-${key}"></i><b>${value}</b> ${label}</button>`
+      )
+      .join('');
+    const alerts = [
+      counts.vulnerable
+        ? `<button class="alert bad${ui.projectFilter === 'security' ? ' active' : ''}" data-act="project-filter" data-filter="security">${icon('shield')}<b>${counts.vulnerable}</b> vulnerable</button>`
+        : '',
+      counts.deprecated
+        ? `<button class="alert warn${ui.projectFilter === 'deprecated' ? ' active' : ''}" data-act="project-filter" data-filter="deprecated">${icon('warning')}<b>${counts.deprecated}</b> deprecated</button>`
+        : '',
+      current.overview && current.summary.drift
+        ? `<button class="alert warn${ui.projectFilter === 'drift' ? ' active' : ''}" data-act="project-filter" data-filter="drift" title="Same dependency on different versions across packages">${icon('git-compare')}<b>${current.summary.drift}</b> version drift</button>`
+        : ''
+    ].join('');
+
+    const scopeAttrs = `data-folder="${esc(current.folder)}" data-scope="${current.scope}"`;
+    let actions;
+    if (pendingUpdate) {
+      actions = `<div class="running">${icon('loading', 'codicon-modifier-spin')}<div><b>Updating in the terminal…</b><span>The list refreshes when the lockfile changes.</span></div></div>`;
+    } else if (!counts.outdated) {
+      actions = '';
+    } else {
+      const primary = counts.safe
+        ? `<button class="btn primary big" data-act="update-mode" data-mode="safe" ${scopeAttrs} title="Minor and patch updates only — keeps every major version">
+            ${icon('arrow-up')}<span class="big-label">Safe update<small>minor &amp; patch · no breaking changes</small></span><span class="big-count">${counts.safe}</span>
+          </button>`
+        : `<button class="btn primary big" data-act="update-mode" data-mode="latest" ${scopeAttrs}>
+            ${icon('arrow-up')}<span class="big-label">Update to latest<small>includes major versions</small></span><span class="big-count">${counts.outdated}</span>
+          </button>`;
+      const secondary = [
+        counts.safe && counts.major
+          ? `<button class="btn" data-act="update-mode" data-mode="latest" ${scopeAttrs} title="Everything to the newest version, including ${counts.major} major">${icon('flame')}All to latest · ${counts.outdated}</button>`
+          : '',
+        counts.fixable.length
+          ? `<button class="btn danger" data-act="update-mode" data-mode="vulnerable" ${scopeAttrs} title="${esc(counts.fixable.join(', '))}">${icon('shield')}Fix vulnerable · ${counts.fixable.length}</button>`
+          : ''
+      ].join('');
+      actions = `${primary}${secondary ? `<div class="hero-secondary">${secondary}</div>` : ''}`;
+    }
+
+    const title = counts.outdated
+      ? `<span class="hero-number">${counts.outdated}</span><span class="hero-text">update${counts.outdated === 1 ? '' : 's'} available</span>`
+      : `<span class="hero-ok">${icon('pass-filled')}</span><span class="hero-text">All ${counts.total} dependencies are up to date</span>`;
+
+    return `<section class="hero">
+      <div class="hero-title">${title}</div>
+      ${bar}
+      ${legend ? `<div class="legends">${legend}</div>` : ''}
+      ${alerts ? `<div class="alerts">${alerts}</div>` : ''}
+      ${actions ? `<div class="hero-actions">${actions}</div>` : ''}
+    </section>`;
+  }
+
+  function updatesHtml() {
     if (!data.hasWorkspace) {
-      return emptyHtml('folder-opened', 'No folder open', 'Open a project to check its dependencies for updates and vulnerabilities.');
+      return emptyHtml('folder-opened', 'No folder open', 'Open a project to see which dependencies can be updated.');
     }
     if (project.status === 'idle' || (project.status === 'loading' && !project.data)) {
       const progress = project.progress;
       const percent = progress && progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
-      return `<div class="progress-card">
+      return `<section class="hero">
           <div class="progress-text">${icon('loading', 'codicon-modifier-spin')}${
-            progress && progress.total ? `Checking ${progress.done} of ${progress.total} packages…` : 'Reading package.json…'
+            progress && progress.total ? `Checking ${progress.done} of ${progress.total} dependencies…` : 'Reading package.json…'
           }</div>
           <div class="progress"><span style="width:${percent}%"></span></div>
-        </div>${skeletonHtml(4)}`;
+        </section>${skeletonHtml(3)}`;
     }
     if (project.status === 'empty') {
       return emptyHtml(
@@ -488,108 +630,95 @@
 
     const current = selectedView();
     if (!current) return emptyHtml('package', 'No package.json', '');
-    const summary = current.summary;
+    if (selectionKey !== current.key) {
+      selection.clear();
+      selectionKey = current.key;
+    }
     const workspace = current.workspace;
-    const loadingNote = project.status === 'loading' ? `<span class="muted small">${icon('loading', 'codicon-modifier-spin')}Updating…</span>` : '';
     const subtitle = current.overview
-      ? `monorepo · ${esc(workspace.tool)} · ${esc(current.manager)}`
+      ? `${workspace.packages.length} packages · ${esc(current.manager)}`
       : workspace.isMonorepo
       ? `${esc(current.folderName)} · ${esc(current.manager)}`
       : esc(current.manager);
-    const back =
-      !current.overview && workspace.overview
-        ? `<button class="btn link back-link" data-act="select-package" data-folder="ws:${esc(workspace.root)}">${icon('arrow-left')}Whole monorepo</button>`
-        : '';
+    const nested = !current.overview && Boolean(workspace.overview);
+    const status = project.status === 'loading' ? `${icon('loading', 'codicon-modifier-spin')}Checking…` : esc(checkedLabel());
 
-    const tiles = [
-      ['all', summary.total, 'All deps', ''],
-      ['outdated', summary.outdated, 'Outdated', summary.outdated ? 'warn' : 'ok'],
-      ['vulnerable', summary.vulnerable, 'Vulnerable', summary.vulnerable ? 'bad' : 'ok'],
-      ['deprecated', summary.deprecated, 'Deprecated', summary.deprecated ? 'bad' : 'ok']
-    ]
-      .map(
-        ([filter, value, label, tone]) =>
-          `<button class="tile-stat ${tone}${ui.projectFilter === filter ? ' active' : ''}" data-act="project-filter" data-filter="${filter}">
-            <span class="tile-value">${value}</span><span class="tile-label">${label}</span>
-          </button>`
-      )
-      .join('');
+    const notes = [
+      project.data.auditAvailable ? '' : `<div class="notice">${icon('info')}<div class="notice-body"><span>Security audit is unavailable right now.</span></div></div>`,
+      current.summary.missing
+        ? `<p class="quiet-note" title="Versions are taken from package.json ranges until you install">${icon('info')}${current.summary.missing} not installed yet — versions are estimated</p>`
+        : ''
+    ].join('');
 
-    const updatable = current.dependencies.filter((dep) => dep.update && !dep.local).length;
-    const updateAll = updatable
-      ? `<button class="btn primary update-all" data-act="update-all" data-folder="${esc(current.folder)}" data-scope="${current.scope}">
-          ${icon('arrow-up')}Update all${current.overview ? ' packages' : ''}… <span class="update-all-count">${updatable}</span>
-        </button>`
-      : `<div class="all-good">${icon('pass')}Everything is up to date</div>`;
+    const headActions = `<button class="btn icon" data-act="open-manifest" data-folder="${esc(current.folder)}" title="Open package.json">${icon('go-to-file')}</button>
+        <button class="btn icon" data-act="project-refresh" title="Check again">${icon('refresh')}</button>`;
+    const head = nested
+      ? `<div class="page-head">
+          <button class="btn icon" data-act="select-package" data-folder="ws:${esc(workspace.root)}" title="Back to the whole monorepo" aria-label="Back to the whole monorepo">${icon('arrow-left')}</button>
+          <div class="page-title"><span>${esc(workspace.name)} · ${esc(current.folderName)}</span><b>${esc(current.name)}</b></div>
+          ${headActions}
+        </div>`
+      : `<div class="page-head root">
+          <div class="page-title"><span class="project-sub">${subtitle}${status ? `<span class="checked">${status}</span>` : ''}</span><b>${esc(current.name)}</b></div>
+          ${headActions}
+        </div>`;
 
-    const auditNote = project.data.auditAvailable
-      ? ''
-      : `<div class="notice">${icon('info')}<div class="notice-body"><span>Security audit is unavailable right now.</span></div></div>`;
-    const missingNote = summary.missing
-      ? `<div class="notice">${icon('warning')}<div class="notice-body"><span>${summary.missing} package${summary.missing === 1 ? ' is' : 's are'} not installed in node_modules.</span></div></div>`
-      : '';
-    const driftNote =
-      current.overview && summary.drift
-        ? `<button class="notice notice-button${ui.projectFilter === 'drift' ? ' active' : ''}" data-act="project-filter" data-filter="drift">${icon('git-compare')}<div class="notice-body"><span><b>${summary.drift}</b> ${summary.drift === 1 ? 'dependency uses' : 'dependencies use'} different versions across packages</span></div></button>`
-        : '';
-
-    return `${back}
-      <div class="project-head">
-        <div class="project-title">
-          <b>${esc(current.name)}</b>${current.version ? `<span class="ver">${esc(current.version)}</span>` : ''}
-          <span class="muted small">${subtitle}</span>
-          ${loadingNote}
-        </div>
-        <button class="btn icon" data-act="open-manifest" data-folder="${esc(current.folder)}" title="Open package.json">${icon('go-to-file')}</button>
-        <button class="btn icon" data-act="project-refresh" title="Check again">${icon('refresh')}</button>
-      </div>
+    return `${head}
       ${projectPickerHtml(current)}
-      <div class="tiles">${tiles}</div>
-      ${updateAll}
-      ${auditNote}${missingNote}${driftNote}
+      ${heroHtml(current)}
+      ${notes}
       ${packagesListHtml(current)}
       <div class="filter-row">
-        <div class="mini-search">${icon('filter')}<input id="projectQuery" type="text" placeholder="Filter dependencies" value="${esc(ui.projectQuery)}" spellcheck="false" aria-label="Filter dependencies"></div>
+        <div class="mini-search">${icon('filter')}<input id="projectQuery" type="text" placeholder="Filter by name" value="${esc(ui.projectQuery)}" spellcheck="false" aria-label="Filter dependencies"></div>
+        ${ui.projectFilter !== 'all' ? `<button class="btn small" data-act="project-filter" data-filter="all">${icon('close')}Show all</button>` : ''}
       </div>
-      <div id="projectRows">${projectRowsHtml(current)}</div>`;
+      <div id="projectRows">${projectRowsHtml(current)}</div>
+      <div id="selectionBar">${selectionBarHtml(current)}</div>`;
   }
 
   function matchesFilter(dep) {
     if (ui.projectQuery && !dep.name.toLowerCase().includes(ui.projectQuery.toLowerCase())) return false;
-    if (ui.projectFilter === 'outdated') return Boolean(dep.update);
-    if (ui.projectFilter === 'vulnerable') return dep.advisories.length > 0;
-    if (ui.projectFilter === 'deprecated') return Boolean(dep.deprecated);
-    if (ui.projectFilter === 'drift') return Boolean(dep.drift);
-    return true;
-  }
-
-  function depRank(dep) {
-    if (dep.advisories.length) return 0;
-    if (dep.deprecated) return 1;
-    if (dep.update === 'major') return 2;
-    if (dep.update) return 3;
-    return 4;
+    switch (ui.projectFilter) {
+      case 'security':
+        return dep.advisories.length > 0;
+      case 'deprecated':
+        return Boolean(dep.deprecated);
+      case 'drift':
+        return Boolean(dep.drift);
+      case 'major':
+      case 'minor':
+        return dep.update === ui.projectFilter;
+      case 'patch':
+        return dep.update === 'patch' || dep.update === 'prerelease';
+      case 'current':
+        return !dep.update;
+      default:
+        return true;
+    }
   }
 
   function projectRowsHtml(current) {
-    const sections = Object.keys(FIELD_LABELS)
-      .map((field) => {
-        const deps = current.dependencies
-          .filter((dep) => dep.field === field && matchesFilter(dep))
-          .sort((a, b) => depRank(a) - depRank(b) || a.name.localeCompare(b.name));
-        if (!deps.length) return '';
-        const outdated = deps.filter((dep) => dep.update && !dep.local).map((dep) => dep.name);
-        const updateAll =
-          outdated.length > 1 && field !== 'peerDependencies'
-            ? `<button class="btn small" data-act="update-many" data-folder="${esc(current.folder)}" data-scope="${current.scope}" data-names="${esc(outdated.join(' '))}" data-dev="${field === 'devDependencies'}" title="${esc(outdated.join(', '))}">${icon('arrow-up')}Update ${outdated.length}</button>`
-            : '';
-        return `<section class="dep-section">
-          <div class="dep-section-head"><span>${FIELD_LABELS[field]}</span><span class="count">${deps.length}</span>${updateAll}</div>
-          ${deps.map((dep) => depRowHtml(dep, current)).join('')}
-        </section>`;
-      })
-      .join('');
-    return sections || emptyHtml('pass', ui.projectFilter === 'all' ? 'No matches' : 'All clear', ui.projectFilter === 'all' ? '' : 'Nothing in this filter.');
+    const visible = current.dependencies.filter(matchesFilter);
+    const sections = UPDATE_GROUPS.map((group) => {
+      const deps = visible.filter((dep) => groupOf(dep) === group.key).sort((a, b) => a.name.localeCompare(b.name));
+      if (!deps.length) return '';
+      const collapsed = group.key === 'current' && !ui.showCurrent && ui.projectFilter !== 'current' && !ui.projectQuery;
+      const updatable = deps.filter(isUpdatable).map((dep) => dep.name);
+      const action =
+        updatable.length > 1
+          ? `<button class="btn small" data-act="update-many" data-folder="${esc(current.folder)}" data-scope="${current.scope}" data-names="${esc(updatable.join(' '))}" title="${esc(updatable.join(', '))}">${icon('arrow-up')}Update ${updatable.length}</button>`
+          : '';
+      const head = `<${group.key === 'current' ? 'button' : 'div'} class="group-head g-${group.key}${group.key === 'current' ? ' toggle-head' : ''}"${
+        group.key === 'current' ? ' data-act="toggle-current"' : ''
+      }>
+          ${icon(group.icon, 'group-icon')}
+          <span class="group-title">${group.label}</span><span class="count">${deps.length}</span>
+          ${group.hint ? `<span class="group-hint">${group.hint}</span>` : '<span class="group-spacer"></span>'}
+          ${action}${group.key === 'current' ? icon(collapsed ? 'chevron-down' : 'chevron-up', 'nav-chevron') : ''}
+        </${group.key === 'current' ? 'button' : 'div'}>`;
+      return `<section class="group-block">${head}${collapsed ? '' : `<div class="dep-list">${deps.map((dep) => depRowHtml(dep, current)).join('')}</div>`}</section>`;
+    }).join('');
+    return sections || emptyHtml('pass', 'Nothing here', ui.projectFilter === 'all' ? 'No dependency matches this name.' : 'Nothing in this filter.');
   }
 
   function depRowHtml(dep, current) {
@@ -598,50 +727,70 @@
       chips.push(
         `<span class="chip sev-${esc(dep.severity)}" title="${esc(dep.advisories.map((item) => `${item.severity}: ${item.title}`).join('\n'))}">${icon('shield')}${esc(dep.severity)}${
           dep.advisories.length > 1 ? ` ×${dep.advisories.length}` : ''
-        }</span>`
+        }${dep.update ? '' : ' · no fix yet'}</span>`
       );
     }
     if (dep.deprecated) chips.push(`<span class="chip bad" title="${esc(dep.deprecated)}">${icon('warning')}deprecated</span>`);
-    if (dep.update) chips.push(`<span class="chip upd-${esc(dep.update)}">${esc(dep.update)}</span>`);
-    if (dep.missing) chips.push('<span class="chip muted-chip" title="Not found in node_modules">not installed</span>');
-    if (dep.local) chips.push('<span class="chip muted-chip">local</span>');
-    if (dep.error) chips.push(`<span class="chip muted-chip" title="${esc(dep.error)}">unknown</span>`);
-    if (current.overview && dep.usages && dep.usages.length > 1) {
-      chips.push(
-        `<span class="chip muted-chip" title="${esc(dep.usages.map((usage) => `${usage.package}: ${usage.range}`).join('\n'))}">${icon('package')}${dep.usages.length} packages</span>`
-      );
-    } else if (current.overview && dep.usages) {
-      chips.push(`<span class="chip muted-chip" title="Used in ${esc(dep.usages[0].package)}">${esc(dep.usages[0].package)}</span>`);
-    }
     if (dep.drift) chips.push(`<span class="chip warn" title="${esc(dep.drift.join('\n'))}">${icon('git-compare')}${dep.drift.length} versions</span>`);
+    if (dep.error) chips.push(`<span class="chip muted-chip" title="${esc(dep.error)}">unknown</span>`);
 
+    const tag = FIELD_TAGS[dep.field] ? `<span class="field-tag">${FIELD_TAGS[dep.field]}</span>` : '';
     const version = dep.local
       ? `<span class="muted">${esc(dep.range)}</span>`
       : `<span class="v-current" title="Range in package.json: ${esc(dep.range)}">${esc(dep.current || dep.range)}</span>${
           dep.update ? `${icon('arrow-right', 'arrow')}<span class="v-latest upd-${esc(dep.update)}">${esc(dep.latest)}</span>` : ''
+        }${
+          current.overview && dep.usages && dep.usages.length > 1
+            ? `<span class="usage" title="${esc(dep.usages.map((usage) => `${usage.package}: ${usage.range}`).join('\n'))}">· ${dep.usages.length} packages</span>`
+            : ''
         }`;
 
-    const update =
-      dep.update && dep.field !== 'peerDependencies'
-        ? `<button class="btn small" data-act="update-one" data-folder="${esc(current.folder)}" data-scope="${current.scope}" data-name="${esc(dep.name)}" data-dev="${dep.field === 'devDependencies'}" title="${
-            current.overview ? `Update ${esc(dep.name)} to ${esc(dep.latest)} in every package that uses it` : `Install ${esc(dep.name)}@latest`
-          }">${icon('arrow-up')}Update</button>`
+    const selectable = isUpdatable(dep);
+    const checked = selection.has(dep.name);
+    const check = selectable
+      ? `<button class="check${checked ? ' on' : ''}" role="checkbox" aria-checked="${checked}" aria-label="Select ${esc(dep.name)}" data-act="toggle-select" data-name="${esc(dep.name)}">${checked ? icon('check') : ''}</button>`
+      : '<span class="check-spacer"></span>';
+    const notes =
+      dep.update === 'major' && dep.releasesUrl
+        ? `<button class="btn icon" data-act="open-url" data-url="${esc(dep.releasesUrl)}" title="Release notes — check for breaking changes">${icon('book')}</button>`
         : '';
+    const update = selectable
+      ? `<button class="btn icon" data-act="update-one" data-folder="${esc(current.folder)}" data-scope="${current.scope}" data-name="${esc(dep.name)}" data-dev="${dep.field === 'devDependencies'}" title="${
+          current.overview ? `Update to ${esc(dep.latest)} in every package that uses it` : `Update to ${esc(dep.latest)}`
+        }">${icon('arrow-up')}</button>`
+      : '';
     const uninstall = current.overview
       ? ''
       : `<button class="btn icon" data-act="uninstall" data-folder="${esc(current.folder)}" data-name="${esc(dep.name)}" title="Uninstall">${icon('trash')}</button>`;
 
-    return `<div class="dep" tabindex="0" data-act="open-dep" data-name="${esc(dep.name)}" title="${esc(dep.description || dep.name)}">
+    return `<div class="dep${checked ? ' selected' : ''}" tabindex="0" data-act="open-dep" data-name="${esc(dep.name)}" title="${esc(dep.description || dep.name)}">
+      ${check}
       <div class="dep-main">
-        <div class="dep-name">${esc(dep.name)}</div>
+        <div class="dep-line"><span class="dep-name">${esc(dep.name)}</span>${tag}</div>
         <div class="dep-version">${version}</div>
         ${chips.length ? `<div class="dep-chips">${chips.join('')}</div>` : ''}
       </div>
-      <div class="dep-actions">
-        ${update}
-        ${uninstall}
-      </div>
+      <div class="dep-actions">${notes}${update}${uninstall}</div>
     </div>`;
+  }
+
+  function selectionBarHtml(current) {
+    if (!selection.size) return '';
+    const names = [...selection];
+    return `<div class="selbar">
+      <span><b>${names.length}</b> selected</span>
+      <button class="btn link" data-act="clear-selection">Clear</button>
+      <button class="btn primary" data-act="update-many" data-folder="${esc(current.folder)}" data-scope="${current.scope}" data-names="${esc(names.join(' '))}">${icon('arrow-up')}Update selected</button>
+    </div>`;
+  }
+
+  function refreshProjectRows() {
+    const current = selectedView();
+    const rows = document.getElementById('projectRows');
+    const bar = document.getElementById('selectionBar');
+    if (!current || !rows) return;
+    rows.innerHTML = projectRowsHtml(current);
+    if (bar) bar.innerHTML = selectionBarHtml(current);
   }
 
   function savedHtml() {
@@ -663,10 +812,7 @@
           .join('')
       : '<p class="muted small pad">Packages you open will show up here.</p>';
 
-    return `<section class="block">
-        <div class="block-head"><span>${icon('star-full')}Saved</span><span class="count">${data.favorites.length}</span></div>
-        ${favorites}
-      </section>
+    return `<section class="block">${favorites}</section>
       <section class="block">
         <div class="block-head"><span>${icon('history')}Recently viewed</span>${
           data.recent.length ? '<button class="btn link" data-act="clear-recent">Clear</button>' : ''
@@ -676,19 +822,19 @@
   }
 
   function viewsHtml() {
-    const summary = (selectedView() || {}).summary;
-    let projectBadge = '';
-    if (summary && summary.vulnerable) projectBadge = `<span class="badge bad" title="Vulnerable packages">${summary.vulnerable}</span>`;
-    else if (summary && summary.outdated) projectBadge = `<span class="badge warn" title="Outdated packages">${summary.outdated}</span>`;
+    const view = selectedView();
+    const counts = view ? countsOf(view.dependencies) : null;
+    let badge = '';
+    if (counts && counts.vulnerable) badge = `<span class="badge bad" title="${counts.vulnerable} vulnerable">${counts.outdated || counts.vulnerable}</span>`;
+    else if (counts && counts.outdated) badge = `<span class="badge accent" title="Updates available">${counts.outdated}</span>`;
     const tabs = [
-      ['discover', 'compass', 'Discover', ''],
-      ['project', 'package', 'Project', projectBadge],
-      ['saved', 'star-full', 'Saved', data.favorites.length ? `<span class="badge">${data.favorites.length}</span>` : '']
+      ['updates', 'arrow-circle-up', 'Updates', badge],
+      ['explore', 'compass', 'Explore', '']
     ];
     return tabs
-      .map(([tab, iconName, label, badge]) => {
+      .map(([tab, iconName, label, extra]) => {
         const active = ui.tab === tab;
-        return `<button class="view${active ? ' active' : ''}" role="tab" aria-selected="${active}" data-act="tab" data-tab="${tab}">${icon(iconName)}<span>${label}</span>${badge}</button>`;
+        return `<button class="view view-${tab}${active ? ' active' : ''}" role="tab" aria-selected="${active}" data-act="tab" data-tab="${tab}">${icon(iconName)}<span>${label}</span>${extra}</button>`;
       })
       .join('');
   }
@@ -698,9 +844,9 @@
     const focusedQuery = document.activeElement && document.activeElement.id === 'projectQuery';
     views.innerHTML = viewsHtml();
 
-    if (ui.tab === 'project') list.innerHTML = projectHtml();
-    else if (ui.tab === 'saved') list.innerHTML = savedHtml();
-    else list.innerHTML = discoverHtml();
+    document.body.dataset.tab = ui.tab;
+    form.hidden = ui.tab !== 'explore';
+    list.innerHTML = ui.tab === 'updates' ? updatesHtml() : discoverHtml();
 
     if (document.scrollingElement) document.scrollingElement.scrollTop = scroll;
     if (focusedQuery) {
@@ -715,18 +861,17 @@
 
   function activeKey() {
     if (data.searchTerm) return data.searchKey;
-    const group = currentGroup();
-    return group ? currentCategoryKey(group) : null;
+    return ui.page && findCategory(ui.page) ? ui.page : null;
   }
 
   function requestActiveCategory() {
-    if (ui.tab !== 'discover') return;
+    if (ui.tab !== 'explore') return;
     const key = activeKey();
     if (key && !states.has(key)) post({ type: 'openCategory', key });
   }
 
   function ensureProject() {
-    if (ui.tab === 'project' && project.status === 'idle' && data.hasWorkspace) {
+    if (ui.tab === 'updates' && project.status === 'idle' && data.hasWorkspace) {
       project.status = 'loading';
       post({ type: 'loadProject' });
     }
@@ -738,6 +883,13 @@
     render();
     requestActiveCategory();
     ensureProject();
+  }
+
+  function openPage(page) {
+    ui.page = page;
+    persist();
+    render();
+    scrollTop();
   }
 
   function scrollTop() {
@@ -757,25 +909,22 @@
       case 'tab':
         setTab(target.dataset.tab);
         break;
-      case 'select-group':
-        ui.group = target.dataset.group;
+      case 'toggle-group': {
+        const name = target.dataset.group;
+        ui.openGroups = ui.openGroups.includes(name) ? ui.openGroups.filter((item) => item !== name) : [...ui.openGroups, name];
         persist();
         render();
-        requestActiveCategory();
-        break;
-      case 'select-category': {
-        const group = currentGroup();
-        if (!group) break;
-        ui.categoryByGroup[group.name] = target.dataset.key;
-        persist();
-        render();
-        requestActiveCategory();
         break;
       }
-      case 'toggle-categories':
-        ui.showAllCategories = !ui.showAllCategories;
-        persist();
-        render();
+      case 'open-category':
+        openPage(target.dataset.key);
+        requestActiveCategory();
+        break;
+      case 'open-page':
+        openPage(target.dataset.page);
+        break;
+      case 'go-home':
+        openPage(null);
         break;
       case 'density':
         ui.density = target.dataset.density;
@@ -825,6 +974,26 @@
         persist();
         render();
         break;
+      case 'toggle-current':
+        ui.showCurrent = !ui.showCurrent;
+        persist();
+        refreshProjectRows();
+        break;
+      case 'toggle-select':
+        if (selection.has(target.dataset.name)) selection.delete(target.dataset.name);
+        else selection.add(target.dataset.name);
+        refreshProjectRows();
+        break;
+      case 'clear-selection':
+        selection.clear();
+        refreshProjectRows();
+        break;
+      case 'update-mode':
+        post({ type: 'updateAll', folder: target.dataset.folder, scope: target.dataset.scope, mode: target.dataset.mode });
+        break;
+      case 'open-url':
+        post({ type: 'openUrl', url: target.dataset.url });
+        break;
       case 'open-manifest':
         post({ type: 'openManifest', folder: target.dataset.folder });
         break;
@@ -836,13 +1005,13 @@
         break;
       case 'update-many':
         post({ type: 'updateDeps', folder: target.dataset.folder, scope: target.dataset.scope, names: target.dataset.names.split(' '), dev: target.dataset.dev === 'true' });
-        break;
-      case 'update-all':
-        post({ type: 'updateAll', folder: target.dataset.folder, scope: target.dataset.scope });
+        selection.clear();
+        refreshProjectRows();
         break;
       case 'select-package':
         ui.projectFolder = target.dataset.folder;
         if (ui.projectFilter === 'drift' && !ui.projectFolder.startsWith('ws:')) ui.projectFilter = 'all';
+        ui.projectQuery = '';
         persist();
         scrollTop();
         render();
@@ -899,9 +1068,7 @@
   list.addEventListener('input', (event) => {
     if (event.target.id !== 'projectQuery') return;
     ui.projectQuery = event.target.value;
-    const current = selectedView();
-    const rows = document.getElementById('projectRows');
-    if (current && rows) rows.innerHTML = projectRowsHtml(current);
+    refreshProjectRows();
   });
 
   list.addEventListener('keydown', (event) => {
@@ -921,7 +1088,7 @@
     if (!value) return;
     input.value = value;
     closeSuggest();
-    ui.tab = 'discover';
+    ui.tab = 'explore';
     persist();
     scrollTop();
     post({ type: 'search', term: value });
@@ -1073,6 +1240,11 @@
     const typing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement && document.activeElement.tagName);
     if (event.key === '/' && !typing) {
       event.preventDefault();
+      if (ui.tab === 'updates') {
+        const query = document.getElementById('projectQuery');
+        if (query) query.focus();
+        return;
+      }
       input.focus();
       input.select();
     }
@@ -1089,7 +1261,7 @@
         data.searchKey = message.searchKey;
         if (data.searchTerm) input.value = data.searchTerm;
         else if (document.activeElement !== input) input.value = '';
-        if (!data.groups.some((group) => group.name === ui.group)) ui.group = data.groups[0] ? data.groups[0].name : null;
+        if (ui.page && ui.page !== SAVED_GROUP && !findCategory(ui.page)) ui.page = null;
         render();
         requestActiveCategory();
         ensureProject();
@@ -1107,7 +1279,7 @@
           total: message.total,
           error: message.error
         });
-        if (ui.tab === 'discover') render();
+        if (ui.tab === 'explore') render();
         break;
       case 'suggestions':
         if (message.seq !== suggest.seq) break;
@@ -1117,6 +1289,7 @@
         renderSuggest();
         break;
       case 'project':
+        if (message.status === 'ready') setPending(false, true);
         project.status = message.status;
         project.data = message.data || project.data;
         project.progress = message.progress;
@@ -1125,17 +1298,28 @@
         break;
       case 'projectProgress':
         project.progress = message.progress;
-        if (ui.tab === 'project' && !project.data) render();
+        if (ui.tab === 'updates' && !project.data) render();
+        break;
+      case 'updateStatus':
+        setPending(message.running);
         break;
       case 'showTab':
         setTab(message.tab);
         break;
       case 'focusSearch':
+        if (ui.tab !== 'explore') setTab('explore');
         input.focus();
         input.select();
         break;
     }
   });
+
+  function setPending(running, silent) {
+    clearTimeout(pendingTimer);
+    pendingUpdate = Boolean(running);
+    if (pendingUpdate) pendingTimer = setTimeout(() => setPending(false), PENDING_TIMEOUT_MS);
+    if (!silent && ui.tab === 'updates') render();
+  }
 
   function applyUserData(message) {
     data.favorites = message.favorites;

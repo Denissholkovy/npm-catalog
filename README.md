@@ -1,82 +1,114 @@
-# NPM Catalog
+# NPM Catalog — dependency updates for VS Code
 
-Discover, compare and install npm packages without leaving VS Code — and keep
-an eye on the dependencies you already have.
+See every outdated, vulnerable and deprecated npm package in your project or
+monorepo, and update them in one click — without leaving the editor.
+
+![Updates view: single project and monorepo](images/updates.png)
+
+## Why
+
+- **You open VS Code and already know.** Dependencies are checked on startup;
+  the number of available updates appears on the activity bar icon and in the
+  status bar.
+- **Safe by default.** *Safe update* installs only minor and patch versions, so
+  nothing breaking slips in. Major versions are one click away, with a
+  confirmation and release notes.
+- **Security first.** Packages with known advisories are listed at the top and
+  *Fix vulnerable* updates only them.
 
 ## Features
 
-### Discover
-- **Curated catalog** — 80+ categories across Frontend, Backend (Node.js),
-  Mobile (React Native), Full-Stack, DevOps & Tooling, Utilities, plus a
-  **Project Starters** page with one-click `create-*` generators.
-- **Rich package cards** — weekly downloads, number of dependent packages,
-  last publish date (stale packages are highlighted), license, keywords and a
-  popularity bar relative to the list.
-- **Live search with autocomplete** — suggestions as you type, recent
-  searches, `keywords:` search by clicking any tag. Press `/` to focus search.
-- **Sorting and density** — popular, most downloaded, recently updated or
-  A–Z; detailed cards or a compact list.
+### One-click updates
+
+| Button | What it does |
+| --- | --- |
+| **Safe update** | Minor and patch versions only — keeps every major version |
+| **All to latest** | Everything to the newest version, asks before major updates |
+| **Fix vulnerable** | Only packages with known security advisories |
+| **Update selected** | Tick any packages in the list and update just those |
+
+Dependencies are grouped by risk — **Security**, **Deprecated**, **Major**,
+**Minor**, **Patch**, **Up to date** — and every group can be updated on its
+own. Major updates link straight to the release notes.
+
+### Monorepos
+
+![Monorepo overview and a single workspace package](images/monorepo.png)
+
+npm, yarn and bun `workspaces`, `pnpm-workspace.yaml` and `lerna.json` are
+detected automatically.
+
+- **Whole monorepo** view merges the dependencies of every package and shows
+  where each one is used.
+- **Version drift**: see when the same dependency is on different versions in
+  different packages.
+- Updating from the overview changes every package at once, so versions stay
+  in sync. Open any package to work with it alone.
+
+### Explore
+
+![Explore: categories and a category page](images/explore.png)
+
+A secondary tab for discovering packages: 80+ curated categories for
+frontend, backend, mobile and tooling, live npm search with autocomplete,
+saved packages and recently viewed. Each card shows weekly downloads,
+dependents, last publish, license and popularity compared with the rest of
+the list.
 
 ### Package details
-- Weekly downloads with a **one-year trend chart** and 4-week growth.
-- **Bundle size** (min + gzip), unpacked size, file count, Node engine.
-- **TypeScript support** (built-in or `@types/*`), module format
-  (ESM / CJS), runtime dependency count.
-- **Security advisories** for the latest version, deprecation and archived
-  repository warnings, “no releases for N years” notice.
-- GitHub stars, forks, open issues and last commit.
-- Tabs for **README**, **Versions** (dist-tags, recent releases, install any
-  exact version) and **Dependencies** (click to open, peer deps marked
-  optional).
-- Install commands for **npm, yarn, pnpm and bun** — switch with one click.
-- Shows whether the package is already in your project, with Update and
-  Uninstall buttons.
 
-### Project
-- Scans every `package.json` in the workspace and shows **outdated**
-  (major / minor / patch), **vulnerable** and **deprecated** dependencies.
-- **Monorepo support** — detects `workspaces` (npm, yarn, bun),
-  `pnpm-workspace.yaml` and `lerna.json`. The *Whole monorepo* view merges
-  dependencies from every package, shows where each one is used and flags
-  **version drift** (the same dependency on different ranges in different
-  packages). Drill into any package for its own list.
-- **Update everything in one command** — *Update all…* (or *NPM Catalog:
-  Update All Dependencies…* in the Command Palette) offers: fix vulnerable
-  packages, safe update (minor & patch only) or everything to latest. It runs
-  `npm-check-updates` (with `--workspaces --root` in a monorepo) and then
-  installs with your package manager.
-- Update or uninstall a single package; filter and search the list;
-  refreshes automatically when any `package.json` or lock file changes.
+![Package details page](images/details.png)
 
-### Saved
-- Star packages to keep them in **Saved**; recently viewed packages are
-  remembered too.
+Download trend for the last year, bundle size, TypeScript support, module
+format, security advisories, GitHub activity, versions, dependencies and the
+README. Install with npm, yarn, pnpm or bun, any exact version, as a
+dependency or dev dependency.
 
-## Usage
+## How updates run
 
-1. Click the NPM Catalog icon in the activity bar.
-2. **Discover** — pick a group and a category, or start typing in the search
-   box.
-3. Click a card to open its details; use **Install** / **Dev** to add it to
-   your project.
-4. **Project** — check what is outdated or vulnerable and update it.
+Updates run in the integrated terminal so you can see every step:
 
-Commands (Command Palette → “NPM Catalog”): Search Packages, Open Package by
-Name…, Check Project Dependencies, Update All Dependencies…, Refresh All
-Categories, Clear Search History.
+```bash
+npx npm-check-updates@latest -u --target minor && pnpm install
+```
+
+[npm-check-updates](https://github.com/raineorshine/npm-check-updates)
+rewrites the ranges in `package.json` (with `--workspaces --root` in a
+monorepo), then your package manager installs. The list refreshes as soon as
+the lock file changes. The package manager is detected from the lock file.
+
+## Commands
+
+| Command | |
+| --- | --- |
+| `NPM Catalog: Update All Dependencies…` | Pick safe, latest or vulnerable-only |
+| `NPM Catalog: Show Dependency Updates` | Open the Updates view |
+| `NPM Catalog: Search npm Packages` | Jump to search in Explore |
+| `NPM Catalog: Open Package by Name…` | Open the details page of any package |
 
 ## Settings
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `npmCatalog.pageSize` | `20` | Packages loaded per page |
-| `npmCatalog.cacheTtlHours` | `24` | How long category results stay cached |
-| `npmCatalog.packageManager` | `auto` | Package manager for commands; `auto` detects it from the lock file |
+| `npmCatalog.checkOnStartup` | `true` | Check dependencies when VS Code starts |
+| `npmCatalog.showStatusBar` | `true` | Show the update count in the status bar |
+| `npmCatalog.packageManager` | `auto` | `npm`, `yarn`, `pnpm`, `bun` or `auto` (from the lock file) |
+| `npmCatalog.pageSize` | `20` | Packages per page in Explore |
+| `npmCatalog.cacheTtlHours` | `24` | How long Explore results stay cached |
 
-## Data sources
+## Requirements
 
-npm registry and downloads API, GitHub API (repository stats), npm security
-advisories, bundlephobia (bundle size) and npms.io (name autocomplete).
+- Node.js with `npx` available in the terminal.
+- A workspace with a `package.json`.
+- Commands are chained with `&&`, which works in bash, zsh, cmd and
+  PowerShell 7 (not Windows PowerShell 5.1).
+
+## Privacy
+
+The extension only sends package names (and installed versions, for the security check) to public services: the npm registry
+and downloads API, npm security advisories, the GitHub API (repository
+stats), bundlephobia (bundle size) and npms.io (search suggestions). Nothing
+about your code is uploaded.
 
 ## License
 

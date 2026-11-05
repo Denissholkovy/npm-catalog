@@ -1,30 +1,42 @@
 {
   "name": "npm-catalog",
   "displayName": "NPM Catalog",
-  "description": "Discover, compare and install npm packages without leaving VS Code — curated categories, live search, download trends, bundle size, and an outdated/vulnerable dependency checker for your project.",
-  "version": "0.1.7",
+  "description": "Keep npm dependencies up to date: see outdated, vulnerable and deprecated packages across your project or monorepo and update them in one click. Plus a curated package catalog.",
+  "version": "0.2.0",
   "publisher": "Denys-Shovkovyi",
   "license": "MIT",
   "icon": "media/marketplace-icon.png",
+  "galleryBanner": {
+    "color": "#0e1116",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/Denissholkovy/npm-catalog"
   },
+  "homepage": "https://github.com/Denissholkovy/npm-catalog#readme",
+  "bugs": {
+    "url": "https://github.com/Denissholkovy/npm-catalog/issues"
+  },
   "keywords": [
     "npm",
+    "dependencies",
+    "update",
+    "outdated",
+    "upgrade",
+    "npm-check-updates",
+    "security",
+    "vulnerabilities",
+    "audit",
+    "monorepo",
+    "workspaces",
+    "pnpm",
+    "yarn",
+    "bun",
+    "package.json",
     "packages",
     "catalog",
-    "react",
-    "node",
-    "react-native",
-    "explorer",
-    "dependencies",
-    "outdated",
-    "security",
-    "audit",
-    "bundle size",
-    "monorepo",
-    "workspaces"
+    "explorer"
   ],
   "engines": {
     "vscode": "^1.85.0"
@@ -33,6 +45,9 @@
     "Other"
   ],
   "main": "./src/extension.js",
+  "activationEvents": [
+    "workspaceContains:package.json"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -47,7 +62,7 @@
       "npmCatalog": [
         {
           "id": "npmCatalogView",
-          "name": "Catalog",
+          "name": "Dependencies",
           "type": "webview"
         }
       ]
@@ -61,13 +76,13 @@
       },
       {
         "command": "npmCatalog.searchPackages",
-        "title": "Search Packages",
+        "title": "Search npm Packages",
         "icon": "$(search)",
         "category": "NPM Catalog"
       },
       {
         "command": "npmCatalog.showProjectDependencies",
-        "title": "Check Project Dependencies",
+        "title": "Show Dependency Updates",
         "icon": "$(package)",
         "category": "NPM Catalog"
       },
@@ -100,17 +115,17 @@
         {
           "command": "npmCatalog.searchPackages",
           "when": "view == npmCatalogView",
-          "group": "navigation@1"
+          "group": "navigation@2"
         },
         {
           "command": "npmCatalog.clearSearch",
           "when": "view == npmCatalogView && npmCatalog.hasActiveSearch",
-          "group": "navigation@2"
+          "group": "navigation@3"
         },
         {
           "command": "npmCatalog.showProjectDependencies",
           "when": "view == npmCatalogView",
-          "group": "navigation@3"
+          "group": "more@0"
         },
         {
           "command": "npmCatalog.refresh",
@@ -130,7 +145,7 @@
         {
           "command": "npmCatalog.updateAllDependencies",
           "when": "view == npmCatalogView",
-          "group": "more@0"
+          "group": "navigation@1"
         }
       ]
     },
@@ -161,6 +176,16 @@
           ],
           "default": "auto",
           "description": "Package manager used for install commands. \"auto\" detects it from the lock file."
+        },
+        "npmCatalog.checkOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check the workspace for outdated and vulnerable dependencies when VS Code starts."
+        },
+        "npmCatalog.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the number of available updates in the status bar."
         }
       }
     }

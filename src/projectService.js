@@ -1,5 +1,6 @@
 const { readWorkspaces } = require('./projectEnv');
 const semver = require('./semver');
+const { releaseNotesUrl } = require('./repoUrl');
 
 const LATEST_TTL_MS = 30 * 60 * 1000;
 const SEVERITY_ORDER = ['critical', 'high', 'moderate', 'low', 'info'];
@@ -99,6 +100,7 @@ class ProjectService {
     const advisories = await this.client.getAdvisories(this._versionsToAudit(projects));
 
     return {
+      checkedAt: new Date().toISOString(),
       auditAvailable: advisories !== null,
       workspaces: workspaces.map((workspace) => {
         const packages = workspace.packages.map((project) => this._enrich(project, remote, advisories || {}));
@@ -169,7 +171,8 @@ class ProjectService {
       const value = {
         version: manifest.version || null,
         description: manifest.description || '',
-        deprecated: manifest.deprecated ? String(manifest.deprecated) : null
+        deprecated: manifest.deprecated ? String(manifest.deprecated) : null,
+        releasesUrl: releaseNotesUrl(manifest.repository)
       };
       this.latest.set(name, { timestamp: Date.now(), value });
       return value;
@@ -192,6 +195,7 @@ class ProjectService {
         latest: info.version || null,
         description: info.description || '',
         deprecated: info.deprecated || null,
+        releasesUrl: info.releasesUrl || null,
         error: info.error || null,
         update: local ? null : semver.diff(current, info.version),
         missing: !local && !dep.installed,

@@ -8,11 +8,13 @@ const { UserStore } = require('./userStore');
 const { buildCommand, buildUpdateCommand, buildBulkUpdateCommand, buildUninstallCommand, isScaffold } = require('./installCommand');
 const { LOCKFILES, getWorkspaceFolders, pickWorkspaceFolder, resolveManager, readInstalled } = require('./projectEnv');
 const { safeHttpUrl } = require('./htmlUtils');
+const { getCheckOnStartup, getShowStatusBar } = require('./settings');
 
 const TERMINAL_NAME = 'NPM Catalog';
 const WATCH_DEBOUNCE_MS = 400;
 const WATCHED_FILES = `{**/package.json,pnpm-workspace.yaml,lerna.json,${LOCKFILES.map(([file]) => file).join(',')}}`;
 const IGNORED_PATH = /[\\/]node_modules[\\/]/;
+const STARTUP_CHECK_DELAY_MS = 4000;
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
 
 class ExtensionController {
@@ -42,6 +44,7 @@ class ExtensionController {
       copy: (pkg, dev) => this._copyText(this._commandFor(pkg, dev)),
       update: (folder, names, dev, scope) => this._update(folder, names, dev, scope),
       updateAll: (folder, scope, stats) => this._updateAll(folder, scope, stats),
+      runUpdate: (folder, scope, mode, stats) => this._runUpdate(folder, scope, mode, stats),
       uninstall: (folder, name) => this._uninstall(folder, name),
       openManifest: (folder) => this._openManifest(folder),
       initProject: () => this._initProject(),
@@ -63,6 +66,49 @@ class ExtensionController {
 
     this._registerCommands();
     this._watchProjectChanges();
+    this._createStatusBar();
+    this._scheduleStartupCheck();
+  }
+
+  _createStatusBar() {
+    this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
+    this.statusBar.name = 'NPM Catalog: dependency updates';
+    this.statusBar.command = 'npmCatalog.showProjectDependencies';
+    this.context.subscriptions.push(
+      this.statusBar,
+      this.viewProvider.onDidChangeSummary((summary) => this._renderStatusBar(summary)),
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('npmCatalog.showStatusBar')) this._renderStatusBar(this.viewProvider.summary);
+      })
+    );
+  }
+
+  _renderStatusBar(summary) {
+    if (!summary || !getShowStatusBar() || (!summary.outdated && !summary.vulnerable)) {
+      this.statusBar.hide();
+      return;
+    }
+    const parts = [];
+    if (summary.vulnerable) parts.push(`$(shield) ${summary.vulnerable}`);
+    if (summary.outdated) parts.push(`$(arrow-up) ${summary.outdated}`);
+    this.statusBar.text = parts.join('  ');
+    this.statusBar.tooltip = [
+      summary.vulnerable && `${summary.vulnerable} vulnerable`,
+      summary.outdated && `${summary.outdated} updates available${summary.major ? ` (${summary.major} major)` : ''}`,
+      'Click to review'
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    this.statusBar.backgroundColor = summary.vulnerable ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+    this.statusBar.show();
+  }
+
+  _scheduleStartupCheck() {
+    if (!getCheckOnStartup() || !this.projectService.hasProjects()) return;
+    const timer = setTimeout(() => {
+      if (this.viewProvider.project.status === 'idle') this.viewProvider.loadProject();
+    }, STARTUP_CHECK_DELAY_MS);
+    this.context.subscriptions.push({ dispose: () => clearTimeout(timer) });
   }
 
   _registerCommands() {
@@ -70,6 +116,7 @@ class ExtensionController {
 
     this._registerCommand('npmCatalog.searchPackages', async () => {
       await vscode.commands.executeCommand('npmCatalogView.focus');
+      this.viewProvider.showTab('explore');
       this.viewProvider.focusSearch();
     });
 
@@ -79,7 +126,7 @@ class ExtensionController {
 
     this._registerCommand('npmCatalog.showProjectDependencies', async () => {
       await vscode.commands.executeCommand('npmCatalogView.focus');
-      this.viewProvider.showTab('project');
+      this.viewProvider.showTab('updates');
     });
 
     this._registerCommand('npmCatalog.updateAllDependencies', () => this._updateAllFromPalette());
@@ -195,8 +242,8 @@ class ExtensionController {
   async _update(folderPath, names, dev, scope) {
     const target = await this._resolveFolder(folderPath);
     if (!target) return;
-    if (scope === 'workspace') {
-      this._run(target, buildBulkUpdateCommand({ names, workspaces: true, manager: target.manager }));
+    if (scope === 'workspace' || names.length > 1) {
+      this._run(target, buildBulkUpdateCommand({ names, workspaces: scope === 'workspace', manager: target.manager }));
       return;
     }
     const installed = readInstalled();
@@ -275,6 +322,27 @@ class ExtensionController {
       matchOnDescription: true
     });
     if (choice) this._run(target, command(choice.options));
+  }
+
+  async _runUpdate(folderPath, scope, mode, stats) {
+    const target = await this._resolveFolder(folderPath);
+    if (!target) return false;
+    const options = { workspaces: scope === 'workspace', manager: target.manager };
+    if (mode === 'safe') options.target = 'minor';
+    if (mode === 'vulnerable') {
+      if (!stats.vulnerable.length) return false;
+      options.names = stats.vulnerable;
+    }
+    if (mode === 'latest' && stats.major) {
+      const confirm = await vscode.window.showWarningMessage(
+        `Update everything to latest, including ${stats.major} major version${stats.major === 1 ? '' : 's'}?`,
+        { modal: true, detail: 'Major versions can contain breaking changes. Check the release notes and run your tests afterwards.' },
+        'Update all'
+      );
+      if (confirm !== 'Update all') return false;
+    }
+    this._run(target, buildBulkUpdateCommand(options));
+    return true;
   }
 
   async _uninstall(folderPath, name) {

@@ -22,4 +22,12 @@ function getPackageManagerSetting() {
   return config().get('packageManager') || 'auto';
 }
 
-module.exports = { getPageSize, getCacheTtlMs, getPackageManagerSetting };
+function getCheckOnStartup() {
+  return config().get('checkOnStartup') !== false;
+}
+
+function getShowStatusBar() {
+  return config().get('showStatusBar') !== false;
+}
+
+module.exports = { getPageSize, getCacheTtlMs, getPackageManagerSetting, getCheckOnStartup, getShowStatusBar };
