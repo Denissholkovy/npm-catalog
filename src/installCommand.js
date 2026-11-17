@@ -48,17 +48,21 @@ function buildCommand({ name, installType, manager, dev, version }) {
   }
 }
 
-function buildUpdateCommand({ names, manager, dev }) {
+function buildUpdateSteps({ names, target, workspaces, manager, ignorePeers }) {
   const pm = managerOf(manager);
-  return INSTALL[pm](names.map((name) => `${name}@latest`).join(' '), Boolean(dev));
-}
-
-function buildBulkUpdateCommand({ names, target, workspaces, manager }) {
   const args = ['-u'];
   if (target === 'minor' || target === 'patch') args.push(`--target ${target}`);
   if (names && names.length) args.push(`--filter "${names.join(',')}"`);
   if (workspaces) args.push('--workspaces --root');
-  return `npx npm-check-updates@latest ${args.join(' ')} && ${managerOf(manager)} install`;
+  const install = pm === 'npm' && ignorePeers ? 'npm install --legacy-peer-deps' : `${pm} install`;
+  return [
+    { id: 'check', label: 'update package.json', command: `npx --yes npm-check-updates@latest ${args.join(' ')}` },
+    { id: 'install', label: 'install', command: install }
+  ];
+}
+
+function describeSteps(steps) {
+  return steps.map((step) => step.command).join(' → ');
 }
 
 function buildUninstallCommand({ names, manager }) {
@@ -74,8 +78,8 @@ function buildAllCommands(options) {
 module.exports = {
   MANAGERS,
   buildCommand,
-  buildUpdateCommand,
-  buildBulkUpdateCommand,
+  buildUpdateSteps,
+  describeSteps,
   buildUninstallCommand,
   buildAllCommands,
   isScaffold

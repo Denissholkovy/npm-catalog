@@ -46,6 +46,7 @@ class CatalogViewProvider {
     this._onDidChangeSummary = new vscode.EventEmitter();
     this.onDidChangeSummary = this._onDidChangeSummary.event;
     this.summary = null;
+    this.updating = false;
     this._loadCategoryTree();
   }
 
@@ -260,6 +261,7 @@ class CatalogViewProvider {
       case 'ready':
         this._post(this._snapshot());
         if (this.project.status !== 'idle') this._sendProject();
+        if (this.updating) this._post({ type: 'updateStatus', running: true });
         break;
       case 'search':
         if (typeof message.term === 'string' && message.term.trim()) this.setSearch(message.term.trim());
@@ -381,9 +383,12 @@ class CatalogViewProvider {
       this.actions.updateAll(folder, normalizedScope, stats);
       return;
     }
-    Promise.resolve(this.actions.runUpdate(folder, normalizedScope, mode, stats)).then((running) =>
-      this._post({ type: 'updateStatus', running: Boolean(running) })
-    );
+    this.actions.runUpdate(folder, normalizedScope, mode, stats);
+  }
+
+  setUpdating(running) {
+    this.updating = Boolean(running);
+    this._post({ type: 'updateStatus', running: this.updating });
   }
 
   _projectPackage(name) {

@@ -188,7 +188,18 @@
           "description": "Show the number of available updates in the status bar."
         }
       }
-    }
+    },
+    "taskDefinitions": [
+      {
+        "type": "npmCatalog",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Command run by NPM Catalog"
+          }
+        }
+      }
+    ]
   },
   "scripts": {
     "test": "echo \"No tests yet\""

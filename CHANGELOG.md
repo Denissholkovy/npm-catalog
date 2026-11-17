@@ -8,6 +8,7 @@ Dependency updates are now the heart of the extension.
 - Dependencies grouped by risk (Security, Deprecated, Major, Minor, Patch, Up to date) with per-group update, checkboxes and *Update selected*, release-notes links for major updates.
 - Dependencies are checked on startup; the update count appears on the activity bar icon and in the status bar (`npmCatalog.checkOnStartup`, `npmCatalog.showStatusBar`).
 - One visual style across Updates and Explore; cleaner rows with fewer badges; better layout in narrow and wide sidebars.
+- Updates are safe to run: they execute as a VS Code task step by step, `package.json` and the lock file are restored if `npm-check-updates` or the install fails (for example on a peer dependency conflict), with *Safe update instead* and *Retry ignoring peer conflicts* offered afterwards. Single and selected updates go through the same flow and keep each dependency in its own section.
 - Catalog, search and saved packages moved to the secondary *Explore* tab. Explore is now a list: Saved and every group with its categories; a category opens its own page with a back button. Package cards keep the popularity bar.
 
 ## 0.1.1 – 0.1.7

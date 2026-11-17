@@ -30,10 +30,8 @@
   const selection = new Set();
   let selectionKey = null;
   let pendingUpdate = false;
-  let pendingTimer = null;
 
   const SUGGEST_DELAY_MS = 220;
-  const PENDING_TIMEOUT_MS = 3 * 60 * 1000;
   const TILE_COLORS = ['blue', 'green', 'orange', 'purple', 'red', 'yellow'];
   const SORTS = [
     ['relevance', 'Popular'],
@@ -566,7 +564,7 @@
     const scopeAttrs = `data-folder="${esc(current.folder)}" data-scope="${current.scope}"`;
     let actions;
     if (pendingUpdate) {
-      actions = `<div class="running">${icon('loading', 'codicon-modifier-spin')}<div><b>Updating in the terminal…</b><span>The list refreshes when the lockfile changes.</span></div></div>`;
+      actions = `<div class="running">${icon('loading', 'codicon-modifier-spin')}<div><b>Updating…</b><span>Progress is in the terminal. If the install fails, package.json is restored.</span></div></div>`;
     } else if (!counts.outdated) {
       actions = '';
     } else {
@@ -1289,7 +1287,6 @@
         renderSuggest();
         break;
       case 'project':
-        if (message.status === 'ready') setPending(false, true);
         project.status = message.status;
         project.data = message.data || project.data;
         project.progress = message.progress;
@@ -1314,11 +1311,10 @@
     }
   });
 
-  function setPending(running, silent) {
-    clearTimeout(pendingTimer);
+  function setPending(running) {
+    if (pendingUpdate === Boolean(running)) return;
     pendingUpdate = Boolean(running);
-    if (pendingUpdate) pendingTimer = setTimeout(() => setPending(false), PENDING_TIMEOUT_MS);
-    if (!silent && ui.tab === 'updates') render();
+    if (ui.tab === 'updates') render();
   }
 
   function applyUserData(message) {

@@ -66,16 +66,24 @@ dependency or dev dependency.
 
 ## How updates run
 
-Updates run in the integrated terminal so you can see every step:
+Updates run as a VS Code task in two steps, so you can follow them in the
+terminal:
 
 ```bash
-npx npm-check-updates@latest -u --target minor && pnpm install
+npx --yes npm-check-updates@latest -u --target minor   # 1. rewrite package.json
+pnpm install                                           # 2. install
 ```
 
 [npm-check-updates](https://github.com/raineorshine/npm-check-updates)
 rewrites the ranges in `package.json` (with `--workspaces --root` in a
-monorepo), then your package manager installs. The list refreshes as soon as
-the lock file changes. The package manager is detected from the lock file.
+monorepo), then your package manager installs. The package manager is
+detected from the lock file.
+
+**Nothing breaks if an update fails.** `package.json` files and the lock file
+are saved before the update. If either step fails — most often a peer
+dependency conflict, when a package doesn't support the newest version of
+another yet — they are restored and you can pick *Safe update instead* or,
+with npm, *Retry ignoring peer conflicts* (`--legacy-peer-deps`).
 
 ## Commands
 
@@ -100,8 +108,7 @@ the lock file changes. The package manager is detected from the lock file.
 
 - Node.js with `npx` available in the terminal.
 - A workspace with a `package.json`.
-- Commands are chained with `&&`, which works in bash, zsh, cmd and
-  PowerShell 7 (not Windows PowerShell 5.1).
+- A trusted workspace (updates run as VS Code tasks).
 
 ## Privacy
 

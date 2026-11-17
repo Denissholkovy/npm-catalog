@@ -5,8 +5,9 @@ const { ProjectService } = require('./projectService');
 const { CatalogViewProvider } = require('./catalogViewProvider');
 const { PackageDetailsPanel } = require('./packageDetailsPanel');
 const { UserStore } = require('./userStore');
-const { buildCommand, buildUpdateCommand, buildBulkUpdateCommand, buildUninstallCommand, isScaffold } = require('./installCommand');
-const { LOCKFILES, getWorkspaceFolders, pickWorkspaceFolder, resolveManager, readInstalled } = require('./projectEnv');
+const { buildCommand, buildUpdateSteps, describeSteps, buildUninstallCommand, isScaffold } = require('./installCommand');
+const { LOCKFILES, getWorkspaceFolders, pickWorkspaceFolder, resolveManager, readInstalled, readWorkspaces } = require('./projectEnv');
+const { UpdateRunner, manifestFiles } = require('./updateRunner');
 const { safeHttpUrl } = require('./htmlUtils');
 const { getCheckOnStartup, getShowStatusBar } = require('./settings');
 
@@ -15,6 +16,8 @@ const WATCH_DEBOUNCE_MS = 400;
 const WATCHED_FILES = `{**/package.json,pnpm-workspace.yaml,lerna.json,${LOCKFILES.map(([file]) => file).join(',')}}`;
 const IGNORED_PATH = /[\\/]node_modules[\\/]/;
 const STARTUP_CHECK_DELAY_MS = 4000;
+const RETRY_IGNORING_PEERS = 'Retry ignoring peer conflicts';
+const SAFE_INSTEAD = 'Safe update instead';
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
 
 class ExtensionController {
@@ -23,10 +26,11 @@ class ExtensionController {
     this.packageService = new PackageService(context);
     this.projectService = new ProjectService(this.packageService.client);
     this.userStore = new UserStore(context);
+    this.updateRunner = new UpdateRunner();
     this.detailsHandlers = {
       install: (pkg, options) => this._install(pkg, options),
       copy: (text) => this._copyText(text),
-      update: (name, dev) => this._updateInstalled(name, dev),
+      update: (name) => this._updateInstalled(name),
       uninstall: (name) => {
         const info = readInstalled()[name];
         this._uninstall(info ? info.path : undefined, name);
@@ -61,7 +65,8 @@ class ExtensionController {
       this.userStore.onDidChange(() => {
         this.viewProvider.refreshView();
         if (PackageDetailsPanel.current) PackageDetailsPanel.current.refreshUserState();
-      })
+      }),
+      this.updateRunner.onDidChangeState((running) => this.viewProvider.setUpdating(running))
     );
 
     this._registerCommands();
@@ -206,7 +211,9 @@ class ExtensionController {
     return {
       uri: { fsPath: folderPath },
       name: relative ? `${root.name}/${relative}` : root.name,
-      manager: resolveManager(root)
+      manager: resolveManager(root),
+      root: root.uri.fsPath,
+      folder: root
     };
   }
 
@@ -221,7 +228,7 @@ class ExtensionController {
       vscode.window.showWarningMessage('Open a project folder first.');
       return null;
     }
-    return { uri: folder.uri, name: folder.name, manager: resolveManager(folder) };
+    return { uri: folder.uri, name: folder.name, manager: resolveManager(folder), root: folder.uri.fsPath, folder };
   }
 
   async _install(pkg, { dev = false, version, manager } = {}) {
@@ -241,21 +248,15 @@ class ExtensionController {
 
   async _update(folderPath, names, dev, scope) {
     const target = await this._resolveFolder(folderPath);
-    if (!target) return;
-    if (scope === 'workspace' || names.length > 1) {
-      this._run(target, buildBulkUpdateCommand({ names, workspaces: scope === 'workspace', manager: target.manager }));
-      return;
-    }
-    const installed = readInstalled();
-    const isDev = dev || names.every((name) => installed[name] && installed[name].field === 'devDependencies');
-    this._run(target, buildUpdateCommand({ names, manager: target.manager, dev: isDev }));
+    if (!target) return false;
+    return this._startUpdate(target, { names, workspaces: scope === 'workspace' });
   }
 
-  _updateInstalled(name, dev) {
+  _updateInstalled(name) {
     const info = readInstalled()[name];
-    if (!info) return this._update(undefined, [name], dev);
-    if (info.monorepo) return this._update(info.root, [name], dev, 'workspace');
-    return this._update(info.path, [name], dev);
+    if (!info) return this._update(undefined, [name]);
+    if (info.monorepo) return this._update(info.root, [name], false, 'workspace');
+    return this._update(info.path, [name]);
   }
 
   async _updateAllFromPalette() {
@@ -283,51 +284,48 @@ class ExtensionController {
   async _updateAll(folderPath, scope, stats) {
     if (!stats.outdated) {
       vscode.window.showInformationMessage('All dependencies are already up to date.');
-      return;
+      return false;
     }
     const target = await this._resolveFolder(folderPath);
-    if (!target) return;
+    if (!target) return false;
     const workspaces = scope === 'workspace';
     const where = workspaces ? `all packages of ${target.name}` : target.name;
-    const command = (options) => buildBulkUpdateCommand({ ...options, workspaces, manager: target.manager });
+    const detail = (options) => describeSteps(buildUpdateSteps({ ...options, workspaces, manager: target.manager }));
     const plural = (count) => `${count} package${count === 1 ? '' : 's'}`;
 
     const choices = [];
     if (stats.vulnerable.length) {
-      choices.push({
-        label: '$(shield) Fix vulnerable packages',
-        description: plural(stats.vulnerable.length),
-        detail: command({ names: stats.vulnerable }),
-        options: { names: stats.vulnerable }
-      });
+      const options = { names: stats.vulnerable };
+      choices.push({ label: '$(shield) Fix vulnerable packages', description: plural(stats.vulnerable.length), detail: detail(options), options });
     }
     choices.push(
       {
         label: '$(check) Safe update — minor & patch',
         description: `up to ${plural(stats.outdated - stats.major)} · keeps major versions`,
-        detail: command({ target: 'minor' }),
+        detail: detail({ target: 'minor' }),
         options: { target: 'minor' }
       },
       {
         label: '$(rocket) Everything to latest',
         description: `${plural(stats.outdated)}${stats.major ? ` · ${stats.major} major, may need code changes` : ''}`,
-        detail: command({}),
+        detail: detail({}),
         options: {}
       }
     );
 
     const choice = await vscode.window.showQuickPick(choices, {
       title: `Update dependencies in ${where}`,
-      placeHolder: 'Runs npm-check-updates, rewrites package.json ranges, then installs',
+      placeHolder: 'Rewrites package.json ranges with npm-check-updates, then installs. Rolled back if anything fails.',
       matchOnDescription: true
     });
-    if (choice) this._run(target, command(choice.options));
+    if (!choice) return false;
+    return this._startUpdate(target, { ...choice.options, workspaces });
   }
 
   async _runUpdate(folderPath, scope, mode, stats) {
     const target = await this._resolveFolder(folderPath);
     if (!target) return false;
-    const options = { workspaces: scope === 'workspace', manager: target.manager };
+    const options = { workspaces: scope === 'workspace' };
     if (mode === 'safe') options.target = 'minor';
     if (mode === 'vulnerable') {
       if (!stats.vulnerable.length) return false;
@@ -336,13 +334,71 @@ class ExtensionController {
     if (mode === 'latest' && stats.major) {
       const confirm = await vscode.window.showWarningMessage(
         `Update everything to latest, including ${stats.major} major version${stats.major === 1 ? '' : 's'}?`,
-        { modal: true, detail: 'Major versions can contain breaking changes. Check the release notes and run your tests afterwards.' },
+        { modal: true, detail: 'Major versions can contain breaking changes. Check the release notes and run your tests afterwards. If the install fails, package.json is restored.' },
         'Update all'
       );
       if (confirm !== 'Update all') return false;
     }
-    this._run(target, buildBulkUpdateCommand(options));
+    return this._startUpdate(target, options);
+  }
+
+  _updateFiles(target, workspaces) {
+    const workspace = readWorkspaces().find((item) => item.root === target.root);
+    const dirs = workspaces && workspace ? workspace.packages.map((pkg) => pkg.folder) : [target.uri.fsPath];
+    return manifestFiles(dirs, [target.uri.fsPath, target.root], LOCKFILES.map(([file]) => file));
+  }
+
+  async _startUpdate(target, options) {
+    const steps = buildUpdateSteps({ ...options, manager: target.manager });
+    const result = await this.updateRunner.run({
+      scope: target.folder,
+      cwd: target.uri.fsPath,
+      title: `Update ${target.name}`,
+      steps,
+      files: this._updateFiles(target, options.workspaces)
+    });
+    if (result.status === 'busy') return false;
+    this._reportUpdate(result, target, options);
     return true;
+  }
+
+  async _reportUpdate(result, target, options) {
+    if (result.status === 'done') {
+      vscode.window.setStatusBarMessage(`$(check) ${target.name}: dependencies updated`, 6000);
+      return;
+    }
+    if (result.status === 'error') {
+      vscode.window.showErrorMessage(`Could not start the update: ${result.message}`);
+      return;
+    }
+    const restored = result.restored
+      ? 'package.json and the lock file were restored, so the project is unchanged.'
+      : 'Nothing was changed.';
+    if (result.step === 'check') {
+      vscode.window.showErrorMessage(`npm-check-updates failed (exit code ${result.exitCode}). ${restored} See the terminal for details.`);
+      return;
+    }
+
+    const actions = [];
+    if (target.manager === 'npm' && !options.ignorePeers) actions.push(RETRY_IGNORING_PEERS);
+    if (!options.target && !(options.names && options.names.length)) actions.push(SAFE_INSTEAD);
+    const choice = await vscode.window.showErrorMessage(
+      `${target.manager} install failed — the update was rolled back.`,
+      {
+        modal: true,
+        detail: [
+          restored,
+          'This is usually a peer dependency conflict: one of the new versions is not supported yet by another package. The terminal shows which packages conflict.',
+          actions.includes(SAFE_INSTEAD) ? 'Safe update (minor & patch) avoids most conflicts.' : '',
+          actions.includes(RETRY_IGNORING_PEERS)
+            ? 'Retrying with --legacy-peer-deps installs anyway; the conflicting packages may not work together.'
+            : ''
+        ].filter(Boolean).join('\n\n')
+      },
+      ...actions
+    );
+    if (choice === RETRY_IGNORING_PEERS) this._startUpdate(target, { ...options, ignorePeers: true });
+    else if (choice === SAFE_INSTEAD) this._startUpdate(target, { ...options, target: 'minor' });
   }
 
   async _uninstall(folderPath, name) {
